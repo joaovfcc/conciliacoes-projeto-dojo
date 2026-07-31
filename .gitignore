@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.spec
+.venv/
+
+# Configuration and local data
+.env
+.env.*
+!.env.example
+runtime/
+data/
+output/
+*.log
+*.db
+
+# Generated reconciliation artifacts
+01_Entrada/
+02_Processados/
+03_Pendencias/
+04_Resultados/
+05_Configuracao/CONFIGURACAO_CONTAS.xlsx
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+~$*

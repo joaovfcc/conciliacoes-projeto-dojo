@@ -94,3 +94,37 @@ na saída dos testes; o status final é mantido aqui.
 - Arquivos afetados: `README.md`, `docs`, CI.
 - Riscos: aprovação contábil depende do piloto externo.
 - Status: CONCLUIDO
+
+## Adendo PDF — backlog TDD
+
+Todos os itens abaixo foram executados com teste falhando (RED), menor implementação correta
+(GREEN), refatoração e suíte completa. Prioridade é alta; `PDF-016` e `PDF-017` são críticas.
+Risco comum: variações de layouts reais; mitigação: parser conservador e fixtures anonimizadas.
+
+| ID | Entrega e requisito | Dependências | Aceite e testes | Arquivos principais | Status |
+|---|---|---|---|---|---|
+| PDF-001 | Modelo normalizado de extrato | T-001 | `Decimal`, tipos, origem e confiança cobertos em unitário | `models.py` | CONCLUÍDO |
+| PDF-002 | Validação de arquivos PDF | PDF-001 | assinatura, extensão, vazio, proteção, corrupção, tamanho e páginas | `extraction.py`, integração | CONCLUÍDO |
+| PDF-003 | Extração de texto | PDF-002 | todas as páginas pesquisáveis extraídas por pypdf | `extraction.py`, fixtures text-based | CONCLUÍDO |
+| PDF-004 | Detecção de digitalizados | PDF-003 | página abaixo do mínimo seleciona OCR, sem OCR desnecessário | `extraction.py`, fixtures scanned | CONCLUÍDO |
+| PDF-005 | Adaptador de OCR | PDF-004 | protocolo substituível, Tesseract isolado, timeout e confiança | `extraction.py`, testes com adapter | CONCLUÍDO |
+| PDF-006 | Identificação de layout | PDF-003 | Itaú reconhecido; desconhecido rejeitado sem lançamentos | `parsers.py` | CONCLUÍDO |
+| PDF-007 | Parser genérico | PDF-006 | somente tabela segura e explicitamente reconhecível | `parsers.py` | CONCLUÍDO |
+| PDF-008 | Parser específico | PDF-006 | `ITAU_TEXTO_V1` com cabeçalho e movimentos sintéticos | `parsers.py`, fixture Itaú | CONCLUÍDO |
+| PDF-009 | Datas e valores | PDF-001 | datas BR/sem ano seguro, milhar, vírgula e sinal posterior | `parsers.py`, unitários | CONCLUÍDO |
+| PDF-010 | Crédito e débito | PDF-009 | sinais e marcadores C/D/CR/DB, sem valor absoluto | `parsers.py`, unitários | CONCLUÍDO |
+| PDF-011 | Descrição multilinha | PDF-008 | continuação vira um movimento; quebra de página preservada | `parsers.py`, unitários | CONCLUÍDO |
+| PDF-012 | Cabeçalhos e rodapés | PDF-008 | repetição multipágina não vira movimento | `parsers.py`, integração | CONCLUÍDO |
+| PDF-013 | Duplicidades | PDF-009 | ID estável e alerta sem duplicar importação | `parsers.py`, unitários | CONCLUÍDO |
+| PDF-014 | Validação de saldo | PDF-009 | saldo consistente e divergência evidenciada | `parsers.py`, unitários | CONCLUÍDO |
+| PDF-015 | Relatório de importação | PDF-002..014 | páginas, método, válidos, rejeitados, alertas, erros e duração | `service.py`, `reporting.py` | CONCLUÍDO |
+| PDF-016 | Integração com conciliação | PDF-015 | `ReadResult` comum, motor sem dependência de pypdf | `adapters.py`, `processing.py`, E2E | CONCLUÍDO |
+| PDF-017 | Evidência com página | PDF-016 | divergência exibe arquivo, página, trecho, parser e método | `reporting.py`, E2E | CONCLUÍDO |
+| PDF-018 | Testes unitários | PDF-001..014 | normalização, detector, parser e validadores verdes | `tests/unit/test_pdf_*` | CONCLUÍDO |
+| PDF-019 | Testes de integração | PDF-002..015 | PDFs estruturais reais, páginas, OCR e erros | `tests/integration/test_pdf_statements.py` | CONCLUÍDO |
+| PDF-020 | Teste end-to-end | PDF-016..019 | PDF até Excel com divergência rastreável | `tests/e2e/test_processing.py` | CONCLUÍDO |
+| PDF-021 | Documentação | PDF-001..020 | README, arquitetura, decisões, layouts e matriz atualizados | `README.md`, `docs/` | CONCLUÍDO |
+
+Observação de implantação: o adaptador OCR está integrado e formalmente desabilitado por padrão.
+O binário Tesseract não está presente neste ambiente de build; sua homologação deve ocorrer na
+máquina corporativa após instalação, sem alterar o contrato ou o fluxo de conciliação.

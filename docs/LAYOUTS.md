@@ -6,7 +6,7 @@ Cabeçalhos obrigatórios: `Empresa`, `Filial`, `Conta contábil`, `Descrição`
 `Conta bancária`, `Formato aceito`, `Tolerância de data`, `Tolerância de valor`,
 `Regra principal` e `Ativa`. `Responsável` é opcional.
 
-- `Formato aceito`: uma lista como `CSV,XLSX,OFX`.
+- `Formato aceito`: uma lista como `CSV,XLSX,OFX,PDF`.
 - `Tolerância de data`: inteiro não negativo em dias.
 - `Tolerância de valor`: número monetário, por exemplo `0,01`.
 - `Ativa`: `SIM` ou `NAO`.
@@ -59,6 +59,21 @@ Cada movimento deve estar em `STMTTRN` e conter `DTPOSTED` e `TRNAMT`. `FITID`,
 `CHECKNUM`/`REFNUM` e `MEMO`/`NAME` são opcionais. O leitor aceita OFX SGML 1.x sem tags de
 fechamento individuais e OFX XML que preserve esses blocos.
 
+## Extrato PDF
+
+Nome: `EXTRATO_BANCO_AGENCIA_CONTA_AAAAMM.pdf`. O arquivo deve ter assinatura `%PDF`, não pode
+estar protegido e deve respeitar os limites `PDF_*`.
+
+O perfil específico atual é `ITAU_TEXTO_V1`, com marcadores `ITAU`, `EXTRATO DE CONTA`, período,
+agência/conta e movimentos iniciados por data. O fallback `GENERICO_TABELAR_V1` só aceita uma
+tabela com cabeçalho inequívoco de data, descrição e valor; conteúdo desconhecido é rejeitado.
+Valores aceitam C/D/CR/DB e sinal posterior. Datas sem ano só são aceitas quando o período foi
+identificado. Descrições podem continuar em linhas/páginas seguintes.
+
+Cada registro conserva arquivo, página, trecho, método (`TEXTO`, `OCR` ou `MISTO`), parser,
+confiança e avisos. PDF digitalizado exige OCR explicitamente habilitado e os executáveis
+Poppler/Tesseract no `PATH`.
+
 ## Tipos, sinais e rastreabilidade
 
 - datas: `DD/MM/AAAA`, `AAAA-MM-DD`, `DD-MM-AAAA`, `AAAAMMDD` ou célula de data XLSX;
@@ -68,4 +83,3 @@ fechamento individuais e OFX XML que preserve esses blocos.
 - documento: caixa/pontuação são normalizadas, zeros à esquerda são preservados;
 - identificador de origem: é preservado como texto, inclusive hífens;
 - uma linha inválida é registrada sem descartar linhas válidas do mesmo arquivo.
-

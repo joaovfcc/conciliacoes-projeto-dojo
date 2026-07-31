@@ -47,3 +47,25 @@
 - Justificativa: testes/build reproduzíveis e experiência de duplo clique/terminal.
 - Consequências: o executável é artefato gerado, deve ser distribuído por canal corporativo e
   pode exigir assinatura conforme a política local.
+
+## D-006 — Extração PDF direta antes de OCR
+
+- Contexto: PDF pode conter texto utilizável ou apenas imagens.
+- Decisão: pypdf extrai e mede texto página a página; OCR só processa páginas abaixo do limite.
+- Justificativa: preserva qualidade, desempenho e rastreabilidade sem OCR desnecessário.
+- Consequências: PDFs digitalizados exigem ferramentas externas quando o fallback estiver ativo.
+
+## D-007 — OCR substituível e desabilitado por padrão
+
+- Decisão: `PdfOcrExtractor` é um protocolo; a implementação Tesseract usa Poppler/Tesseract em
+  subprocessos sem shell e fica atrás de `PDF_ENABLE_OCR=NAO`.
+- Justificativa: instalação segura e previsível; a conciliação não conhece a ferramenta.
+- Consequências: o operador deve instalar os binários e habilitar explicitamente. A CI valida o
+  contrato com adaptador determinístico e PDFs image-only; homologação do binário é ambiental.
+
+## D-008 — Parsers conservadores por layout
+
+- Decisão: o detector tenta parsers específicos em ordem e só então um genérico tabular estrito.
+- Justificativa: evita uma expressão regular monolítica e não inventa lançamentos.
+- Consequências: a primeira fatia específica é `ITAU_TEXTO_V1`; layouts reais novos exigem
+  fixture anonimizada, parser e testes antes de uso.

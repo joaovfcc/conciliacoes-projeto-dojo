@@ -19,6 +19,10 @@ Não coloque senhas, tokens, números de cartão ou credenciais na configuraçã
 5. Aguarde a mensagem `Processamento concluído`.
 6. Abra `04_Resultados\AAAA-MM\CONCILIACAO_*.xlsx`.
 
+PDF pesquisável funciona sem configuração adicional. Para digitalizados, instale Poppler e
+Tesseract e defina `PDF_ENABLE_OCR=SIM`; mantenha `NAO` quando OCR não for homologado. Nunca use
+OCR para contornar PDF protegido: solicite uma exportação sem senha ao banco.
+
 ## Revisão do relatório
 
 1. Comece por `Resumo` e filtre `COM_DIVERGENCIAS`.
@@ -27,7 +31,8 @@ Não coloque senhas, tokens, números de cartão ou credenciais na configuraçã
 4. Revise integralmente `Razao_Sem_Extrato` e `Extrato_Sem_Razao`.
 5. Em `Ambiguidades`, escolha manualmente somente após validar todas as evidências.
 6. Consulte `Erros_Tecnicos` e o log para arquivos/linhas rejeitados.
-7. Preserve relatório, log, manifesto e pastas processadas como pacote de evidências.
+7. Para PDF, confira página, trecho original, parser, método e confiança antes de decidir.
+8. Preserve relatório, log, manifesto e pastas processadas como pacote de evidências.
 
 ## Corrigir e reexecutar
 
@@ -41,6 +46,8 @@ para evitar perda de idempotência.
 ## Quando acionar desenvolvimento
 
 - layout real válido não reconhecido;
+- `PDF_LAYOUT_NAO_RECONHECIDO`, OCR com confiança baixa ou página ilegível;
+- PDF pesquisável que foi classificado incorretamente como digitalizado;
 - OFX sem `STMTTRN`, `DTPOSTED` ou `TRNAMT` apesar de abrir no banco;
 - conta corretamente configurada ainda não relacionada;
 - totais do detalhe diferentes do resumo;
@@ -50,3 +57,6 @@ para evitar perda de idempotência.
 Envie apenas fixtures anonimizadas, o código/mensagem do erro e o log; não envie dados
 bancários completos por canais não aprovados.
 
+Ao solicitar um novo parser, envie uma fixture estruturalmente equivalente e anonimizada, indique
+banco/layout/período esperado e exemplos de débito/crédito. Desenvolvimento deverá registrar o
+parser antes do genérico e incluir testes unitários, integração e evidência por página.

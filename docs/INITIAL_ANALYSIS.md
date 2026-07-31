@@ -10,12 +10,12 @@ arquivar as entradas. Não há banco, API, RPA, autenticação nem interface web
 ## Escopo, atores, entradas e saídas
 
 - Atores: analista contábil, revisor/coordenador e equipe de desenvolvimento.
-- Entradas: configuração XLSX, razão CSV/XLSX e extratos OFX/CSV/XLSX.
+- Entradas: configuração XLSX, razão CSV/XLSX e extratos OFX/CSV/XLSX/PDF.
 - Saídas: relatório `CONCILIACAO_EMPRESA_AAAAMM.xlsx`, log técnico, manifesto de hashes e
   arquivos preservados em pastas de processados ou pendências.
 - Escopo: conciliação um-para-um exata, tolerância de data, valor/data sem documento,
   divergência de valor/data, ausências, ambiguidades e duplicidades.
-- Fora do escopo: integração com Protheus/bancos, PDF/OCR, muitos-para-muitos, IA,
+- Fora do escopo: integração com Protheus/bancos, muitos-para-muitos, IA,
   multiusuário, workflow e histórico em banco.
 
 ## Regras de negócio
@@ -64,3 +64,9 @@ Arquitetura hexagonal leve: CLI/orquestrador na borda, adaptadores de arquivos, 
 para normalização e conciliação, e adaptadores de saída para Excel, logs e arquivamento.
 Detalhes estão em `docs/ARCHITECTURE.md`.
 
+## Adendo de 31/07/2026 — extratos PDF
+
+PDF passou a integrar o escopo. A fatia vertical inclui PDF pesquisável, detecção de páginas
+digitalizadas, OCR configurável por adaptador, parser Itaú sintético, fallback genérico seguro,
+normalização, validação e evidência por página no relatório. A homologação de layouts bancários
+reais e do executável Tesseract no ambiente corporativo continua dependente do piloto.

@@ -1,0 +1,96 @@
+# Plano de implementação
+
+Cada item usa os critérios e cenários do PRD. O histórico RED/GREEN é registrado nos commits e
+na saída dos testes; o status final é mantido aqui.
+
+## T-001 — Fundação técnica e contratos
+
+- ID: T-001
+- Descrição: criar pacote, configuração de qualidade, modelos e utilitários seguros.
+- Requisito de origem: RNF-003, RNF-005, RNF-006, RNF-009.
+- Prioridade: alta. Dependências: nenhuma.
+- Critérios de aceitação: instalação local, lint, testes e build reproduzíveis no Windows.
+- Cenários de teste: dinheiro brasileiro/internacional, datas, documentos e IDs.
+- Arquivos afetados: `pyproject.toml`, `src/conciliacao`, `tests`.
+- Riscos: coerção monetária e ambiente corporativo.
+- Status: CONCLUIDO
+
+## T-002 — Configuração, descoberta e validações
+
+- ID: T-002
+- Descrição: template/configuração XLSX, pastas, nomes, formatos, período, hash e completude.
+- Requisito de origem: RF-001, RF-002, RF-003, RF-004, RF-006, RF-015.
+- Prioridade: alta. Dependências: T-001.
+- Critérios de aceitação: arquivos válidos são tipados; ausentes, vazios, temporários,
+  duplicados, corrompidos ou fora do período geram diagnóstico acionável.
+- Cenários de teste: nomes válidos/inválidos, hash repetido e configuração incompleta.
+- Arquivos afetados: `config.py`, `discovery.py`, fixtures.
+- Riscos: layouts reais desconhecidos.
+- Status: CONCLUIDO
+
+## T-003 — Adaptadores e normalização
+
+- ID: T-003
+- Descrição: ler razão CSV/XLSX e extrato CSV/XLSX/OFX com rastreabilidade por registro.
+- Requisito de origem: RF-005, RF-011, RNF-001, RNF-005, RNF-010.
+- Prioridade: alta. Dependências: T-001, T-002.
+- Critérios de aceitação: importar 100% das linhas válidas, reportar inválidas e preservar
+  arquivo/linha; sinais e datas canônicos.
+- Cenários de teste: vazio, colunas ausentes, datas/valores inválidos, caracteres especiais,
+  débito/crédito e OFX com FITID.
+- Arquivos afetados: `adapters`, `normalization.py`, fixtures.
+- Riscos: variações de cabeçalhos/OFX.
+- Status: CONCLUIDO
+
+## T-004 — Motor conservador de conciliação
+
+- ID: T-004
+- Descrição: regras 1–9, ordem, unicidade, divergências e métricas.
+- Requisito de origem: RF-007, RF-008, RF-009, RF-010, RNF-006, RNF-007.
+- Prioridade: crítica. Dependências: T-001.
+- Critérios de aceitação: cada status observável correto, tolerâncias respeitadas, nenhum item
+  reutilizado e candidatos múltiplos não escolhidos.
+- Cenários de teste: exato, tolerância, documento ausente, valor/data divergente, ausências,
+  múltiplos candidatos e duplicidade.
+- Arquivos afetados: `reconciliation.py`, `tests/unit`.
+- Riscos: falsos positivos; mitigado por prioridade e unicidade.
+- Status: CONCLUIDO
+
+## T-005 — Excel e evidências
+
+- ID: T-005
+- Descrição: gerar as sete abas obrigatórias, resumo derivado e campos de análise humana.
+- Requisito de origem: RF-010, RF-011, RF-012, RNF-001, RNF-007.
+- Prioridade: alta. Dependências: T-003, T-004.
+- Critérios de aceitação: abas/cabeçalhos definidos, totais reconciliam, filtros, painéis e
+  formatação legíveis, valores e origens presentes.
+- Cenários de teste: relatório misto, listas vazias, formula injection e reabertura do XLSX.
+- Arquivos afetados: `reporting.py`, `tests/integration`.
+- Riscos: resumo inconsistente; mitigado por derivação única.
+- Status: CONCLUIDO
+
+## T-006 — Orquestração, log, arquivamento e reprocessamento
+
+- ID: T-006
+- Descrição: execução integral, recuperação parcial, manifesto de hashes e CLI/BAT.
+- Requisito de origem: RF-013, RF-014, RF-016, RNF-002, RNF-004, RNF-010.
+- Prioridade: alta. Dependências: T-002 a T-005.
+- Critérios de aceitação: fluxo completo gera relatório/log, move válidos/rejeitados, não
+  sobrescreve output e exige flag para hash já visto; crítico não move entradas.
+- Cenários de teste: primeira execução, parcial, repetição e falha de configuração.
+- Arquivos afetados: `processing.py`, `cli.py`, BAT, integração/E2E.
+- Riscos: falha após movimento; mitigado por gerar output antes de arquivar.
+- Status: CONCLUIDO
+
+## T-007 — Documentação, segurança e auditoria final
+
+- ID: T-007
+- Descrição: manuais, layouts, rastreabilidade, dependências e validação limpa.
+- Requisito de origem: todos os RF/RNF e critérios de aceite 1–14.
+- Prioridade: alta. Dependências: T-001 a T-006.
+- Critérios de aceitação: README executável por terceiro, matriz completa, testes/lint/build
+  verdes e varredura sem segredo.
+- Cenários de teste: instalação limpa e cenário mensal fictício.
+- Arquivos afetados: `README.md`, `docs`, CI.
+- Riscos: aprovação contábil depende do piloto externo.
+- Status: CONCLUIDO

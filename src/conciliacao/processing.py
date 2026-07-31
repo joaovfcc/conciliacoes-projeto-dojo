@@ -348,6 +348,14 @@ def _processed_file(
         total_debit=read_result.total_debit,
         total_credit=read_result.total_credit,
         status=status,
+        page_count=int(read_result.metadata.get("page_count", 0)),
+        extraction_method=str(read_result.metadata.get("extraction_method", "")),
+        valid_record_count=int(
+            read_result.metadata.get("valid_record_count", len(read_result.records))
+        ),
+        rejected_record_count=int(read_result.metadata.get("rejected_record_count", 0)),
+        warning_count=int(read_result.metadata.get("warning_count", len(read_result.warnings))),
+        duration_seconds=Decimal(str(read_result.metadata.get("duration_seconds", "0"))),
     )
 
 
@@ -497,6 +505,7 @@ def _execution_logger(path: Path) -> logging.Logger:
     logger.propagate = False
     handler = logging.FileHandler(path, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    handler.addFilter(_SensitiveDataFilter())
     logger.addHandler(handler)
     return logger
 
@@ -505,3 +514,21 @@ def _close_logger(logger: logging.Logger) -> None:
     for handler in list(logger.handlers):
         handler.close()
         logger.removeHandler(handler)
+
+
+class _SensitiveDataFilter(logging.Filter):
+    """Remove contas completas sem alterar arquivos, relatórios ou manifesto formal."""
+
+    _statement_name = re.compile(
+        r"(EXTRATO_[^\\/\s]+_[^_\\/\s]+_)([^_\\/\s]+)(_\d{6}\.(?:CSV|XLSX|OFX|PDF))",
+        re.IGNORECASE,
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        record.msg = self._statement_name.sub(
+            lambda match: f"{match.group(1)}*****{match.group(2)[-4:]}{match.group(3)}",
+            message,
+        )
+        record.args = ()
+        return True

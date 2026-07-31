@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 
 class Status(StrEnum):
@@ -22,6 +22,18 @@ class Status(StrEnum):
     POSSIVEL_DUPLICIDADE = "POSSIVEL_DUPLICIDADE"
     ERRO_DE_DADOS = "ERRO_DE_DADOS"
     ARQUIVO_REJEITADO = "ARQUIVO_REJEITADO"
+
+
+class TransactionType(StrEnum):
+    CREDITO = "CREDITO"
+    DEBITO = "DEBITO"
+    INDEFINIDO = "INDEFINIDO"
+
+
+class ExtractionMethod(StrEnum):
+    TEXT = "TEXT"
+    OCR = "OCR"
+    MIXED = "MIXED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +87,17 @@ class BankRecord:
     source_id: str
     source_file: str
     source_line: int | str
+    source_page: int | None = None
+    source_text: str = ""
+    extraction_method: str = ""
+    parser_name: str = ""
+    confidence: Decimal | None = None
+    balance: Decimal | None = None
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def description(self) -> str:
+        return self.history
 
 
 SourceRecord: TypeAlias = LedgerRecord | BankRecord
@@ -107,6 +130,62 @@ class TechnicalError:
 
 
 @dataclass(frozen=True, slots=True)
+class PdfPageContent:
+    page_number: int
+    text: str
+    extraction_method: ExtractionMethod
+    confidence: Decimal
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PdfRawDocument:
+    source_file: str
+    page_count: int
+    pages: tuple[PdfPageContent, ...]
+    extraction_method: ExtractionMethod
+    duration_seconds: Decimal
+    warnings: tuple[str, ...] = ()
+    errors: tuple[TechnicalError, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class BankTransaction:
+    transaction_date: date
+    description: str
+    document_number: str
+    amount: Decimal
+    transaction_type: TransactionType
+    balance: Decimal | None
+    source_page: int
+    source_text: str
+    confidence: Decimal
+    unique_id: str
+    extraction_method: ExtractionMethod
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class BankStatement:
+    bank: str
+    agency: str
+    account: str
+    holder: str
+    period_start: date
+    period_end: date
+    opening_balance: Decimal | None
+    closing_balance: Decimal | None
+    transactions: tuple[BankTransaction, ...]
+    source_file: str
+    extraction_method: ExtractionMethod
+    parser_name: str
+    page_count: int
+    warnings: tuple[str, ...] = ()
+    errors: tuple[TechnicalError, ...] = ()
+    duration_seconds: Decimal = Decimal("0.00")
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessedFile:
     path: Path
     file_type: str
@@ -120,6 +199,12 @@ class ProcessedFile:
     total_debit: Decimal = Decimal("0.00")
     total_credit: Decimal = Decimal("0.00")
     status: str = "PROCESSADO"
+    page_count: int = 0
+    extraction_method: str = ""
+    valid_record_count: int = 0
+    rejected_record_count: int = 0
+    warning_count: int = 0
+    duration_seconds: Decimal = Decimal("0.00")
 
 
 @dataclass(slots=True)
@@ -160,3 +245,5 @@ class ReadResult:
     errors: list[TechnicalError] = field(default_factory=list)
     total_debit: Decimal = Decimal("0.00")
     total_credit: Decimal = Decimal("0.00")
+    warnings: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)

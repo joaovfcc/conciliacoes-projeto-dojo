@@ -18,7 +18,7 @@ LEDGER_PATTERN = re.compile(
 )
 BANK_PATTERN = re.compile(
     r"^EXTRATO_(?P<bank>[A-Z0-9_-]+)_(?P<agency>[A-Z0-9_-]+)_"
-    r"(?P<account>[A-Z0-9_-]+)_(?P<period>\d{6})\.(?P<extension>ofx|xlsx|csv)$",
+    r"(?P<account>[A-Z0-9_-]+)_(?P<period>\d{6})\.(?P<extension>ofx|xlsx|csv|pdf)$",
     re.IGNORECASE,
 )
 

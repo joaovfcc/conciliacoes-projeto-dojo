@@ -23,7 +23,7 @@ def configured_workspace(tmp_path: Path) -> Path:
             "ITAU",
             "1234",
             "567890",
-            "CSV,XLSX,OFX",
+            "CSV,XLSX,OFX,PDF",
             2,
             "0,01",
             "DOC_VALOR_DATA",
@@ -97,6 +97,8 @@ def test_complete_monthly_processing_generates_report_log_manifest_and_archives(
     assert "Processamento concluído" in log_content
     assert "Duração:" in log_content
     assert "Registros válidos importados: 5" in log_content
+    assert "567890" not in log_content
+    assert "*****7890" in log_content
     workbook = load_workbook(outcome.report_path, data_only=True)
     summary_headers = [cell.value for cell in workbook["Resumo"][1]]
     summary = dict(
@@ -155,3 +157,50 @@ def test_invalid_filename_is_archived_as_pending_and_reported(tmp_path):
 
     assert any(error.file == invalid.name for error in outcome.errors)
     assert (base / "03_Pendencias" / "2026-07" / invalid.name).exists()
+
+
+def test_pdf_statement_flows_to_reconciliation_with_page_evidence(tmp_path):
+    base = configured_workspace(tmp_path)
+    ledger = base / "01_Entrada" / "Razao" / "RAZAO_SPREAD_MATRIZ_202607.csv"
+    ledger.write_text(
+        "Empresa;Filial;Conta contábil;Data;Documento;Histórico;Débito;Crédito\n"
+        "SPREAD;MATRIZ;1.1.1.01.001;05/07/2026;001;Pagamento;90;0\n",
+        encoding="utf-8",
+    )
+    fixture = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "pdf-statements"
+        / "text-based"
+        / "EXTRATO_ITAU_1234_567890_202607.pdf"
+    )
+    statement = base / "01_Entrada" / "Extratos" / fixture.name
+    shutil.copy2(fixture, statement)
+
+    outcome = ReconciliationProcessor(base).run("202607")
+
+    divergence = next(item for item in outcome.results if item.status == "DIVERGENCIA_VALOR")
+    assert divergence.bank.value == -100
+    assert divergence.bank.source_page == 1
+    assert divergence.bank.source_text.startswith("05/07")
+    workbook = load_workbook(outcome.report_path, data_only=True)
+    headers = [cell.value for cell in workbook["Divergencias_Detalhadas"][1]]
+    row = dict(
+        zip(headers, [cell.value for cell in workbook["Divergencias_Detalhadas"][2]], strict=True)
+    )
+    assert row["Valor do razão"] == -90
+    assert row["Valor do extrato"] == -100
+    assert row["Página do PDF"] == 1
+    assert row["Trecho do PDF"].startswith("05/07")
+    assert row["Motivo da divergência"]
+    file_headers = [cell.value for cell in workbook["Arquivos_Processados"][1]]
+    file_rows = [
+        dict(zip(file_headers, [cell.value for cell in row], strict=True))
+        for row in workbook["Arquivos_Processados"].iter_rows(min_row=2)
+    ]
+    pdf_row = next(row for row in file_rows if row["Nome do arquivo"].endswith(".pdf"))
+    assert pdf_row["Quantidade de páginas"] == 1
+    assert pdf_row["Método de extração"] == "TEXT"
+    assert pdf_row["Movimentações válidas"] == 2
+    assert pdf_row["Movimentações rejeitadas"] == 0
+    assert pdf_row["Duração do processamento (s)"] >= 0

@@ -1,6 +1,7 @@
 -r requirements.txt
 build>=1.2,<2
 pyinstaller>=6.14,<7
+reportlab>=4.4,<5
 pytest>=8.3,<9
 pytest-cov>=6,<7
 ruff>=0.11,<1

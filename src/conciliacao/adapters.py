@@ -1,4 +1,4 @@
-"""Adaptadores reais para razão CSV/XLSX e extrato CSV/XLSX/OFX."""
+"""Adaptadores reais para razão CSV/XLSX e extrato CSV/XLSX/OFX/PDF."""
 
 from __future__ import annotations
 
@@ -102,6 +102,10 @@ def read_bank(path: Path, period: str) -> ReadResult:
         )
     if descriptor.extension == "OFX":
         return _read_ofx(path, period, descriptor.bank, descriptor.agency, descriptor.account)
+    if descriptor.extension == "PDF":
+        from conciliacao.pdf_statements.service import read_pdf_statement
+
+        return read_pdf_statement(path, period)
 
     result = ReadResult()
     try:

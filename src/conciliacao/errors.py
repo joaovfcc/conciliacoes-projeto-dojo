@@ -29,3 +29,11 @@ class DuplicateFileError(FileValidationError):
     """Conteúdo já processado em execução anterior."""
 
     code = "ARQUIVO_DUPLICADO"
+
+
+class PdfValidationError(FileValidationError):
+    """PDF recusado por validação estrutural, segurança ou extração."""
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code

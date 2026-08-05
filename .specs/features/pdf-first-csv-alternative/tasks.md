@@ -13,7 +13,7 @@ Cada tarefa usa RED → GREEN → refatoração → gates → commit atômico. `
 
 ## Fase 1 — núcleo comum PDF/CSV
 
-- [ ] `T10` Criar contratos canônicos de formato, adapter, proveniência, issues e seleção de fonte autoritativa.
+- [x] `T10` Criar contratos canônicos de formato, adapter, proveniência e issues; seleção de fonte autoritativa segue em `T13`.
 - [ ] `T11` Implementar registry pela chave completa e detecção fechada em ambiguidade.
 - [ ] `T12` Implementar pipeline comum de gates e compatibilidade com `parseStatement`/preflight atuais.
 - [ ] `T13` Implementar seleção de fonte única e `SOURCE_CROSSCHECK_FAILED`.

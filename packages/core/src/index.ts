@@ -8,3 +8,4 @@ export * from "./balance.js";
 export * from "./private-corpus.js";
 export * from "./private-oracle.js";
 export * from "./corpus-support-matrix.js";
+export * from "./statement-sources.js";

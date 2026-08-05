@@ -37,8 +37,10 @@ estão cobertos por teste e a matriz documental foi atualizada.
 Estrutura de `T04` concluída: 68 PDFs presentes; OFX, CSV e XLSX bancário estão `NOT_PROVIDED` para
 as 18 instituições. Bloqueio externo restante: manifesto privado hash → referência opaca de conta.
 
-Em andamento: Fase 1 — contratos canônicos PDF/CSV e gates comuns. O bloqueio de `T04` não impede
-esse trabalho independente.
+Concluído em `T10`: contratos canônicos PDF/CSV, adapter `detect/parse/validate`, transação decimal,
+proveniência sanitizada e chave completa de suporte, com validações unitárias.
+
+Em andamento: `T11` — registry pela chave completa e detecção fechada em ambiguidade.
 
 ## Handoff
 

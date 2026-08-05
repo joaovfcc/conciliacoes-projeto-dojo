@@ -40,7 +40,10 @@ as 18 instituições. Bloqueio externo restante: manifesto privado hash → refe
 Concluído em `T10`: contratos canônicos PDF/CSV, adapter `detect/parse/validate`, transação decimal,
 proveniência sanitizada e chave completa de suporte, com validações unitárias.
 
-Em andamento: `T11` — registry pela chave completa e detecção fechada em ambiguidade.
+Concluído em `T11`: registry filtra pelo formato, rejeita chaves completas duplicadas, resolve somente
+versões exatas e bloqueia detecção ambígua por limiar/margem.
+
+Em andamento: `T12` — pipeline comum de gates e façade de compatibilidade.
 
 ## Handoff
 

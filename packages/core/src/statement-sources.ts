@@ -98,6 +98,66 @@ export type SourceSupportIdentity = Pick<
   "format" | "institutionCode" | "documentType" | "layoutFamily" | "adapterVersion"
 >;
 
+export type StatementAdapterDiagnostic = {
+  supportKey: string;
+  adapterId: string;
+  adapterVersion: string;
+  detection: StatementSourceDetection;
+};
+
+export type StatementAdapterSelection =
+  | { status: "SELECTED"; adapter: StatementSourceAdapter; diagnostics: readonly StatementAdapterDiagnostic[] }
+  | { status: "AMBIGUOUS"; diagnostics: readonly StatementAdapterDiagnostic[] }
+  | { status: "UNSUPPORTED"; diagnostics: readonly StatementAdapterDiagnostic[] };
+
+export class StatementSourceAdapterRegistry {
+  private readonly bySupportKey: ReadonlyMap<string, StatementSourceAdapter>;
+
+  constructor(
+    private readonly adapters: readonly StatementSourceAdapter[],
+    private readonly minimumScore = 70,
+    private readonly minimumMargin = 20,
+  ) {
+    const entries = adapters.map((adapter) => [sourceSupportKey(adapter), adapter] as const);
+    const keys = entries.map(([key]) => key);
+    if (new Set(keys).size !== keys.length) {
+      throw new Error("Duplicate statement adapter support key.");
+    }
+    this.bySupportKey = new Map(entries);
+  }
+
+  resolve(identity: SourceSupportIdentity): StatementSourceAdapter | undefined {
+    return this.bySupportKey.get(sourceSupportKey(identity));
+  }
+
+  select(source: ExtractedStatementSource): StatementAdapterSelection {
+    const candidates = this.adapters
+      .filter((adapter) => adapter.format === source.format)
+      .map((adapter) => ({ adapter, detection: adapter.detect(source) }))
+      .sort((left, right) => right.detection.score - left.detection.score
+        || sourceSupportKey(left.adapter).localeCompare(sourceSupportKey(right.adapter)));
+    const diagnostics = candidates.map(({ adapter, detection }) => ({
+      supportKey: sourceSupportKey(adapter),
+      adapterId: adapter.adapterId,
+      adapterVersion: adapter.adapterVersion,
+      detection,
+    }));
+    const first = candidates[0];
+    if (!first || !isViableDetection(first.detection, this.minimumScore)) {
+      return { status: "UNSUPPORTED", diagnostics };
+    }
+    const second = candidates[1];
+    if (
+      second
+      && isViableDetection(second.detection, this.minimumScore)
+      && first.detection.score - second.detection.score < this.minimumMargin
+    ) {
+      return { status: "AMBIGUOUS", diagnostics };
+    }
+    return { status: "SELECTED", adapter: first.adapter, diagnostics };
+  }
+}
+
 export function createSourceProvenance(input: SourceProvenance): SourceProvenance {
   requireNonEmpty(input.sourceId, "sourceId");
   requireNonEmpty(input.adapterId, "adapterId");
@@ -137,6 +197,10 @@ function validatePosition(value: number | undefined, field: string): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
     throw new Error(`${field} must be a positive integer.`);
   }
+}
+
+function isViableDetection(detection: StatementSourceDetection, minimumScore: number): boolean {
+  return detection.matched && Number.isFinite(detection.score) && detection.score >= minimumScore;
 }
 
 function requireNonEmpty(value: string, field: string): void {

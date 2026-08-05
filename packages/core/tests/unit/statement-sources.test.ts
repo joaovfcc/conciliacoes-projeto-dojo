@@ -4,6 +4,8 @@ import {
   createSourceProvenance,
   isReconciliationEligibleDocumentType,
   sourceSupportKey,
+  StatementSourceAdapterRegistry,
+  type StatementSourceAdapter,
 } from "../../src/statement-sources.js";
 
 const sha256 = "a".repeat(64);
@@ -65,4 +67,64 @@ describe("canonical statement source contracts", () => {
     expect(isReconciliationEligibleDocumentType("INVESTMENT_ACTIVITY")).toBe(false);
     expect(isReconciliationEligibleDocumentType("INVESTMENT_POSITION")).toBe(false);
   });
+
+  it("selects by format and score while failing closed on ambiguity", () => {
+    const selected = new StatementSourceAdapterRegistry([
+      adapter("PDF_ITAU", "PDF", "341", "ITAU_EMPRESAS_CC", 95),
+      adapter("PDF_OTHER", "PDF", "999", "OTHER_CC", 40),
+      adapter("CSV_ITAU", "CSV", "341", "ITAU_CSV_CC", 100),
+    ]).select({ sourceId: "source", format: "PDF", sha256, pages: [] });
+
+    expect(selected.status).toBe("SELECTED");
+    if (selected.status === "SELECTED") expect(selected.adapter.adapterId).toBe("PDF_ITAU");
+
+    const ambiguous = new StatementSourceAdapterRegistry([
+      adapter("PDF_A", "PDF", "341", "FAMILY_A", 90),
+      adapter("PDF_B", "PDF", "341", "FAMILY_B", 85),
+    ]).select({ sourceId: "source", format: "PDF", sha256, pages: [] });
+
+    expect(ambiguous.status).toBe("AMBIGUOUS");
+  });
+
+  it("rejects duplicate support identities and resolves only an exact versioned key", () => {
+    const first = adapter("PDF_ITAU_A", "PDF", "341", "ITAU_EMPRESAS_CC", 90);
+    const duplicate = adapter("PDF_ITAU_B", "PDF", "341", "ITAU_EMPRESAS_CC", 80);
+    expect(() => new StatementSourceAdapterRegistry([first, duplicate])).toThrow("Duplicate statement adapter support key");
+
+    const registry = new StatementSourceAdapterRegistry([first]);
+    expect(registry.resolve({
+      format: "PDF",
+      institutionCode: "341",
+      documentType: "CURRENT_ACCOUNT",
+      layoutFamily: "ITAU_EMPRESAS_CC",
+      adapterVersion: "1",
+    })?.adapterId).toBe("PDF_ITAU_A");
+    expect(registry.resolve({
+      format: "PDF",
+      institutionCode: "341",
+      documentType: "CURRENT_ACCOUNT",
+      layoutFamily: "ITAU_EMPRESAS_CC",
+      adapterVersion: "2",
+    })).toBeUndefined();
+  });
 });
+
+function adapter(
+  adapterId: string,
+  format: "PDF" | "CSV",
+  institutionCode: string,
+  layoutFamily: string,
+  score: number,
+): StatementSourceAdapter {
+  return {
+    adapterId,
+    adapterVersion: "1",
+    format,
+    institutionCode,
+    documentType: "CURRENT_ACCOUNT",
+    layoutFamily,
+    detect: () => ({ matched: true, score, evidenceCodes: [`${adapterId}_SIGNATURE`] }),
+    parse: () => { throw new Error("not used by registry tests"); },
+    validate: () => ({ accepted: true, issues: [] }),
+  };
+}

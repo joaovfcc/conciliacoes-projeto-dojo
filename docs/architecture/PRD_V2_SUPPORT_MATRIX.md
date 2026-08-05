@@ -50,6 +50,53 @@ pela detecção, pelo parser ou pela conciliação. “Detectado” é a identid
 | Sofisa | 6 | 6 extraídos | 5 CC, 1 posição | Implementado, aguardando oráculo e saldo | Controle de saldo CC e posição de conferência |
 | Vórtx | 2 | 2 layouts não suportados | — | Sem adapter | Conta corrente e carteira de debêntures separadamente |
 
+## Matriz completa por família PDF
+
+Esta é a unidade real de suporte. A matriz tipada equivalente vive em
+`packages/core/src/corpus-support-matrix.ts`; testes impedem que uma das 35 famílias ou um dos 68
+documentos seja removido silenciosamente.
+
+| Lote | Instituição | Tipo | Família | Qtd. | Extração | Status atual |
+|---:|---|---|---|---:|---|---|
+| 1 | Bradesco | Conta-corrente | `BRADESCO_NET_EMPRESA_CC` | 7 | Texto/OCR | `PARTIAL_ADAPTER` |
+| 1 | Bradesco | Investimento | `BRADESCO_NET_EMPRESA_INVEST` | 2 | Texto | `AWAITING_ORACLE` |
+| 1 | BRB | Conta-corrente | `BRB_CC_DETALHADO` | 1 | Texto | `PARSER_DEFECT` |
+| 1 | Itaú | Conta-corrente | `ITAU_EMPRESAS_CC` | 1 | OCR | `AWAITING_OCR` |
+| 1 | Itaú | Aplicação | `ITAU_APLIC_AUT_MAIS` | 1 | OCR | `INFORMATIONAL_ONLY` |
+| 1 | Santander | Conta-corrente | `SANTANDER_IBE_CC` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 1 | Santander | Aplicação | `SANTANDER_IBE_INVEST` | 1 | OCR | `INFORMATIONAL_ONLY` |
+| 1 | Sofisa | Conta-corrente | `SOFISA_NET_CC` | 5 | Texto | `PARTIAL_ADAPTER` |
+| 1 | Sofisa | Posição | `SOFISA_RENDA_FIXA_POSICAO` | 1 | Texto | `INFORMATIONAL_ONLY` |
+| 2 | ABC Brasil | Conta-corrente | `ABC_CC_EXTRATO_DETALHADO` | 4 | Texto | `UNSUPPORTED` |
+| 2 | Banco do Brasil | Conta-corrente | `BB_CC_CONSULTAS` | 1 | Texto | `UNSUPPORTED` |
+| 2 | Banco do Brasil | Rende Fácil | `BB_RENDE_FACIL_RESUMO` | 1 | Texto | `UNSUPPORTED` |
+| 2 | BMG | Conta-corrente | `BMG_CC_WEB` | 4 | Texto | `UNSUPPORTED` |
+| 2 | BMG | Investimento | `BMG_POSICAO_RENDIMENTO` | 1 | Texto | `UNSUPPORTED` |
+| 2 | BMP | Conta-corrente | `BMP_CC_EXTRATO` | 1 | Texto | `UNSUPPORTED` |
+| 3 | Bocom | Conta-corrente sem movimentos | `BOCOM_CC_EMPTY` | 1 | OCR | `AWAITING_OCR` |
+| 3 | Bocom | Conta-corrente analítica | `BOCOM_CC_ANALITICO` | 1 | Texto | `UNSUPPORTED` |
+| 3 | Caixa | Conta-corrente | `CAIXA_CC_EXTRATO_PERIODO` | 2 | Texto | `UNSUPPORTED` |
+| 3 | Caixa | Fundo | `CAIXA_FUNDO_EXTRATO` | 1 | Texto | `UNSUPPORTED` |
+| 3 | Daycoval | Conta-corrente | `DAYCOVAL_CC_EXTRATO_DETALHADO` | 3 | Texto | `UNSUPPORTED` |
+| 3 | Guanabara | Conta-corrente | `GUANABARA_CC` | 1 | Texto | `UNSUPPORTED` |
+| 3 | Guanabara | Conta vinculada | `GUANABARA_CONTA_VINCULADA` | 1 | Texto | `UNSUPPORTED` |
+| 4 | Paulista | Conta-corrente | `PAULISTA_CC_DEMONSTRATIVO` | 1 | Texto | `UNSUPPORTED` |
+| 4 | Paulista | Conta vinculada | `PAULISTA_CONTA_VINCULADA` | 1 | Texto | `UNSUPPORTED` |
+| 4 | Pine | Conta-corrente | `PINE_CC` | 1 | Texto | `UNSUPPORTED` |
+| 4 | Pine | Conta vinculada | `PINE_CONTA_VINCULADA` | 2 | Texto | `UNSUPPORTED` |
+| 4 | Vórtx | Conta-corrente | `VORTX_CC` | 1 | Texto | `UNSUPPORTED` |
+| 4 | Vórtx | Carteira de debêntures | `VORTX_DEBENTURE_PORTFOLIO` | 1 | Texto | `INFORMATIONAL_ONLY` |
+| 5 | Safra | Conta-corrente | `SAFRA_CC_MOVIMENTACAO` | 1 | Texto | `CLASSIFICATION_BLOCKED` |
+| 5 | Safra | Fundo | `SAFRA_FUNDO_POSICAO` | 1 | Texto | `UNSUPPORTED` |
+| 5 | Safra | COE | `SAFRA_COE_POSICAO` | 1 | Texto | `UNSUPPORTED` |
+| 5 | Safra | Produto automático | `SAFRA_PRODUTOS_AUTOMATICOS` | 1 | Texto | `UNSUPPORTED` |
+| 5 | Safra | Nota de negociação | `SAFRA_NOTA_NEGOCIACAO` | 13 | OCR | `UNSUPPORTED` |
+| 6 | Planner | Documento protegido A | `PLANNER_PROTECTED_A` | 1 | Protegido | `PASSWORD_PROTECTED` |
+| 6 | Planner | Documento protegido B | `PLANNER_PROTECTED_B` | 1 | Protegido | `PASSWORD_PROTECTED` |
+
+Totais verificados automaticamente: Lote 1 = 20, Lote 2 = 12, Lote 3 = 10, Lote 4 = 7,
+Lote 5 = 17 e Lote 6 = 2.
+
 ## Regra de homologação
 
 Uma combinação instituição × tipo × família só muda para `HOMOLOGATED` quando possuir contrato,

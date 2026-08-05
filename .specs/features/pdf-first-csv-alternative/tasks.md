@@ -7,7 +7,7 @@ Cada tarefa usa RED → GREEN → refatoração → gates → commit atômico. `
 - [x] `T00` Criar branch dedicada e proteger dados/artefatos privados no `.gitignore`.
 - [x] `T01` Capturar baseline da migração TypeScript e executar lint, typecheck, build e testes.
 - [x] `T02` Aceitar pasta ou ZIP no inventário, enumerar PDFs recursivamente, calcular hashes e não expor nomes privados no relatório.
-- [ ] `T03` Gerar a matriz completa instituição × documento × família × quantidade × status para os 68 PDFs.
+- [x] `T03` Gerar a matriz completa instituição × documento × família × quantidade × status para os 68 PDFs.
 - [ ] `T04` Gerar a matriz instituição × conta anonimizada × formatos × preferência × PDF obrigatório × fallback; iniciar CSV como `NOT_PROVIDED`.
 - [ ] `T05` Atualizar `PRD_V2_SUPPORT_MATRIX.md`, `PRD_V2_PROGRESS.md` e este estado com o resultado reprodutível.
 

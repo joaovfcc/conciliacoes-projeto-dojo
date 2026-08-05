@@ -7,3 +7,4 @@ export * from "./document-registry.js";
 export * from "./balance.js";
 export * from "./private-corpus.js";
 export * from "./private-oracle.js";
+export * from "./corpus-support-matrix.js";

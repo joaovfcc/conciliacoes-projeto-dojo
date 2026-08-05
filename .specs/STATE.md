@@ -31,7 +31,10 @@ Atualizado em: 2026-08-04
 Concluído em `T02`: inventário reprodutível por pasta ou ZIP, com trava opcional de quantidade. A
 execução privada encontrou 68 PDFs, 68 hashes únicos e persistiu apenas metadados sanitizados.
 
-Em andamento: Fase 0 — matrizes completas de famílias PDF e disponibilidade de formatos.
+Concluído em `T03`: catálogo tipado com 35 famílias, 68 PDFs e 18 instituições; invariantes por lote
+estão cobertos por teste e a matriz documental foi atualizada.
+
+Em andamento: `T04` — disponibilidade de formatos e referências anônimas de conta.
 
 ## Handoff
 

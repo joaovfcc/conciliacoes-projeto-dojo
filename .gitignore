@@ -4,31 +4,38 @@ __pycache__/
 *.pyd
 *.egg-info/
 .pytest_cache/
+.pytest-tmp/
 .ruff_cache/
 .coverage
 htmlcov/
 build/
 dist/
 *.spec
+!legacy/python/conciliacao.spec
 .venv/
 
 # Configuration and local data
 .env
 .env.*
 !.env.example
-runtime/
-tmp/
-data/
-output/
+/runtime/
+/tmp/
+/data/
+/output/
+/outputs/
+/private/
+/private-corpus/
+/private-samples/
+/private-reports/
 *.log
 *.db
 
 # Generated reconciliation artifacts
-01_Entrada/
-02_Processados/
-03_Pendencias/
-04_Resultados/
-05_Configuracao/CONFIGURACAO_CONTAS.xlsx
+/01_Entrada/
+/02_Processados/
+/03_Pendencias/
+/04_Resultados/
+/05_Configuracao/CONFIGURACAO_CONTAS.xlsx
 
 # Editors and operating systems
 .idea/
@@ -36,3 +43,12 @@ output/
 .DS_Store
 Thumbs.db
 ~$*
+
+# TypeScript / Next.js
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+.local-storage/
+.sessions/

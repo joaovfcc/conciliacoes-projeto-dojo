@@ -1,0 +1,35 @@
+{
+  "name": "conciliacao-bancaria-web",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dev": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && pnpm --filter @conciliacao/web dev",
+    "build:web": "pnpm --filter @conciliacao/web build",
+    "build:worker": "pnpm --filter @conciliacao/worker build",
+    "build": "pnpm -r build",
+    "test": "pnpm test:unit && pnpm test:components && pnpm test:integration && pnpm test:e2e && pnpm test:security && pnpm test:parity && pnpm test:legacy",
+    "test:unit": "pnpm --filter @conciliacao/core test:unit && pnpm --filter @conciliacao/runtime test:unit && pnpm --filter @conciliacao/worker test:unit && pnpm --filter @conciliacao/web test:unit",
+    "test:components": "pnpm --filter @conciliacao/web test:components",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "test:security": "vitest run tests/security",
+    "test:parity": "vitest run tests/parity",
+    "test:parity:release": "cross-env PARITY_REQUIRED=1 pnpm test:parity",
+    "test:coverage": "pnpm --filter @conciliacao/core exec vitest run --coverage.enabled true && pnpm --filter @conciliacao/runtime exec vitest run --coverage.enabled true && pnpm --filter @conciliacao/worker exec vitest run --coverage.enabled true && pnpm --filter @conciliacao/web exec vitest run --coverage.enabled true",
+    "inventory:private-corpus": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/core inventory:private-corpus",
+    "test:private-statements": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && node scripts/test-private-statements.mjs",
+    "test:legacy": "node legacy/python/scripts/run-tests.mjs",
+    "typecheck": "pnpm -r typecheck && tsc -p tsconfig.tests.json --noEmit",
+    "lint": "pnpm -r lint && eslint tests vitest.config.ts --max-warnings=0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@typescript-eslint/parser": "^8.46.2",
+    "@vitest/coverage-v8": "4.1.10",
+    "cross-env": "10.1.0",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}

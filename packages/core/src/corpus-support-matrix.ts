@@ -32,6 +32,26 @@ export type PdfSupportMatrixSummary = {
   byLot: Record<number, number>;
 };
 
+export type FormatAvailabilityStatus = "PROVIDED" | "NOT_PROVIDED";
+
+export type InitialFormatAvailabilityEntry = {
+  institutionId: string;
+  institutionName: string;
+  documentType: DocumentKind;
+  layoutFamily: string;
+  accountReferenceStatus: "AWAITING_PRIVATE_ACCOUNT_MANIFEST";
+  pdfQuantity: number;
+  formats: {
+    PDF: "PROVIDED";
+    OFX: "NOT_PROVIDED";
+    CSV: "NOT_PROVIDED";
+    BANK_XLSX: "NOT_PROVIDED";
+  };
+  preferredTransactionalFormat: "PDF_TEXT" | "PDF_OCR" | "PDF_TEXT_THEN_OCR" | "BLOCKED_PROTECTED_PDF";
+  pdfRequired: true;
+  fallback: "CSV_AFTER_HOMOLOGATION" | "CREDENTIAL_REQUIRED";
+};
+
 export const PDF_CORPUS_SUPPORT_MATRIX: readonly PdfCorpusSupportEntry[] = [
   pdf(1, "BRADESCO", "Bradesco", "Conta-corrente", "CURRENT_ACCOUNT", "BRADESCO_NET_EMPRESA_CC", 7, "TEXT_OR_OCR", "PARTIAL_ADAPTER"),
   pdf(1, "BRADESCO", "Bradesco", "Investimento", "INVESTMENT_ACTIVITY", "BRADESCO_NET_EMPRESA_INVEST", 2, "TEXT", "AWAITING_ORACLE"),
@@ -87,6 +107,28 @@ export function summarizePdfSupportMatrix(entries: readonly PdfCorpusSupportEntr
   };
 }
 
+export function buildInitialFormatAvailabilityMatrix(
+  entries: readonly PdfCorpusSupportEntry[],
+): InitialFormatAvailabilityEntry[] {
+  return entries.map((entry) => ({
+    institutionId: entry.institutionId,
+    institutionName: entry.institutionName,
+    documentType: entry.documentType,
+    layoutFamily: entry.layoutFamily,
+    accountReferenceStatus: "AWAITING_PRIVATE_ACCOUNT_MANIFEST",
+    pdfQuantity: entry.quantity,
+    formats: {
+      PDF: "PROVIDED",
+      OFX: "NOT_PROVIDED",
+      CSV: "NOT_PROVIDED",
+      BANK_XLSX: "NOT_PROVIDED",
+    },
+    preferredTransactionalFormat: preferredPdfFormat(entry.extractionRequirement),
+    pdfRequired: true,
+    fallback: entry.extractionRequirement === "PASSWORD_PROTECTED" ? "CREDENTIAL_REQUIRED" : "CSV_AFTER_HOMOLOGATION",
+  }));
+}
+
 function pdf(
   lot: PdfCorpusSupportEntry["lot"],
   institutionId: string,
@@ -111,4 +153,19 @@ function pdf(
     currentStatus,
     reconciliationEligible: documentType === "CURRENT_ACCOUNT",
   };
+}
+
+function preferredPdfFormat(
+  extractionRequirement: PdfExtractionRequirement,
+): InitialFormatAvailabilityEntry["preferredTransactionalFormat"] {
+  switch (extractionRequirement) {
+    case "TEXT":
+      return "PDF_TEXT";
+    case "OCR":
+      return "PDF_OCR";
+    case "TEXT_OR_OCR":
+      return "PDF_TEXT_THEN_OCR";
+    case "PASSWORD_PROTECTED":
+      return "BLOCKED_PROTECTED_PDF";
+  }
 }

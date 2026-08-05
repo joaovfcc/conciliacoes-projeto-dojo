@@ -8,8 +8,8 @@ Cada tarefa usa RED → GREEN → refatoração → gates → commit atômico. `
 - [x] `T01` Capturar baseline da migração TypeScript e executar lint, typecheck, build e testes.
 - [x] `T02` Aceitar pasta ou ZIP no inventário, enumerar PDFs recursivamente, calcular hashes e não expor nomes privados no relatório.
 - [x] `T03` Gerar a matriz completa instituição × documento × família × quantidade × status para os 68 PDFs.
-- [ ] `T04` Gerar a matriz instituição × conta anonimizada × formatos × preferência × PDF obrigatório × fallback; iniciar CSV como `NOT_PROVIDED`.
-- [ ] `T05` Atualizar `PRD_V2_SUPPORT_MATRIX.md`, `PRD_V2_PROGRESS.md` e este estado com o resultado reprodutível.
+- [ ] `T04` Gerar a matriz instituição × conta anonimizada × formatos × preferência × PDF obrigatório × fallback; estrutura e formatos concluídos, dimensão conta em `AWAITING_PRIVATE_ACCOUNT_MANIFEST`.
+- [x] `T05` Atualizar `PRD_V2_SUPPORT_MATRIX.md`, `PRD_V2_PROGRESS.md` e este estado com o resultado reprodutível.
 
 ## Fase 1 — núcleo comum PDF/CSV
 

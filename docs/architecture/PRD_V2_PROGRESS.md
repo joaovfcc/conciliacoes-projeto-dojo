@@ -23,6 +23,10 @@ Fonte de requisitos: `PRD_EVOLUCAO_MOTOR_CONCILIACAO_BANCARIA.md`, versão 2.0.
 | Legado Python reproduzível | `pnpm test:legacy` cria `legacy/python/.venv` e executa a suíte sem instalar dependências globais | 83 testes, 87,87% de cobertura | Implementado |
 | Paridade privada | Manifesto por SHA-256, com aprovação obrigatória; job de release falha sem corpus | `private-oracle.test.ts`, `test:parity:release` | Infraestrutura implementada; aguardando oráculo humano |
 | Medição de cobertura TypeScript | `pnpm test:coverage` mede cada workspace sem exclusões de domínio | Core 86,39%; runtime 31,48%; worker 77,77%; web 16,10% (statements) | Implementado; metas do PRD ainda não atendidas |
+| Estratégia PDF-first/CSV alternativo | Especificação executável, decisões, tarefas e releases separados | `.specs/features/pdf-first-csv-alternative/` | Implementado |
+| Inventário por pasta ou ZIP | Enumeração recursiva, SHA-256, trava de quantidade e relatório sanitizado v2 | 68 PDFs, 68 hashes únicos, `private-corpus.test.ts` | Implementado |
+| Matriz integral por família | Catálogo tipado de 35 famílias, 18 instituições e 68 PDFs | `corpus-support-matrix.test.ts`, `PRD_V2_SUPPORT_MATRIX.md` | Implementado |
+| Disponibilidade de formatos | PDF presente; OFX/CSV/XLSX bancário explicitamente `NOT_PROVIDED` | `PRD_V2_FORMAT_AVAILABILITY_MATRIX.md` | Parcial: referências anônimas de conta aguardam manifesto privado |
 
 ## Limitações declaradas
 
@@ -33,6 +37,8 @@ Fonte de requisitos: `PRD_EVOLUCAO_MOTOR_CONCILIACAO_BANCARIA.md`, versão 2.0.
 - A suíte de paridade continua condicionada ao corpus privado e a um manifesto humano aprovado. Ela não usa a saída atual do parser como oracle.
 - O legado Python é mantido apenas como referência e foi validado em ambiente virtual isolado nesta estação. Ele não é a implementação produtiva.
 - O inventário separa pista de instituição (somente para agrupar o corpus privado) da identidade bancária detectada. Assim, nenhum dos 11 documentos extraídos foi indevidamente promovido a `HOMOLOGATED`: todos aguardam oráculo humano e controle de saldo.
+- A dimensão instituição × conta da matriz de formatos aguarda um manifesto privado hash → referência opaca. A estrutura e os status de formato estão prontos; números reais de conta não serão inferidos nem versionados.
+- Não foi fornecido extrato OFX, CSV ou XLSX bancário no corpus atual. Todos permanecem `NOT_PROVIDED`; isso não bloqueia adapters PDF nem a infraestrutura CSV sintética.
 
 ## Próxima sequência segura
 

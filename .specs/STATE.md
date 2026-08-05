@@ -34,7 +34,11 @@ execução privada encontrou 68 PDFs, 68 hashes únicos e persistiu apenas metad
 Concluído em `T03`: catálogo tipado com 35 famílias, 68 PDFs e 18 instituições; invariantes por lote
 estão cobertos por teste e a matriz documental foi atualizada.
 
-Em andamento: `T04` — disponibilidade de formatos e referências anônimas de conta.
+Estrutura de `T04` concluída: 68 PDFs presentes; OFX, CSV e XLSX bancário estão `NOT_PROVIDED` para
+as 18 instituições. Bloqueio externo restante: manifesto privado hash → referência opaca de conta.
+
+Em andamento: Fase 1 — contratos canônicos PDF/CSV e gates comuns. O bloqueio de `T04` não impede
+esse trabalho independente.
 
 ## Handoff
 

@@ -1,29 +1,62 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
 import yauzl from "yauzl";
 
 import { StatementParseError, preflightFiles } from "../dist/src/files.js";
-import { createPrivateCorpusRecord, institutionHintFromOriginalName, summarizePrivateCorpus } from "../dist/src/private-corpus.js";
+import {
+  createPrivateCorpusRecord,
+  institutionHintFromOriginalName,
+  listPrivateCorpusPdfFiles,
+  resolvePrivateCorpusSource,
+  summarizePrivateCorpus,
+} from "../dist/src/private-corpus.js";
 
-const sourceArchive = requiredAbsolutePath("PRIVATE_CORPUS_ZIP");
+const source = resolvePrivateCorpusSource({
+  directory: process.env.PRIVATE_CORPUS_DIR,
+  archive: process.env.PRIVATE_CORPUS_ZIP,
+});
 const reportPath = requiredAbsolutePath("PRIVATE_CORPUS_REPORT");
-const archive = await openArchive(sourceArchive);
+const records = source.kind === "DIRECTORY"
+  ? await inspectDirectory(source.path)
+  : await inspectArchive(source.path);
+const expectedCount = optionalExpectedCount();
+if (expectedCount !== undefined && records.length !== expectedCount) {
+  throw new Error(`Corpus incompleto: esperados ${expectedCount} PDFs, encontrados ${records.length}.`);
+}
+records.sort((left, right) => left.documentId.localeCompare(right.documentId));
+const report = {
+  schemaVersion: 2,
+  sourceKind: source.kind,
+  documents: records,
+  summary: summarizePrivateCorpus(records),
+};
+await mkdir(dirname(reportPath), { recursive: true });
+await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+process.stdout.write(`${JSON.stringify(report.summary)}\n`);
 
-try {
-  const entries = await pdfEntries(archive);
+async function inspectDirectory(path) {
+  const files = await listPrivateCorpusPdfFiles(path);
   const records = [];
-  for (const entry of entries) {
-    const buffer = await entryBuffer(archive, entry);
-    records.push(await inspectDocument(entry.fileName, buffer));
+  for (const file of files) {
+    records.push(await inspectDocument(file.relativeName, await readFile(file.absolutePath)));
   }
-  records.sort((left, right) => left.documentId.localeCompare(right.documentId));
-  const report = { schemaVersion: 1, documents: records, summary: summarizePrivateCorpus(records) };
-  await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  process.stdout.write(`${JSON.stringify(report.summary)}\n`);
-} finally {
-  archive.close();
+  return records;
+}
+
+async function inspectArchive(path) {
+  const archive = await openArchive(path);
+  const records = [];
+  try {
+    const entries = await pdfEntries(archive);
+    for (const entry of entries) {
+      const buffer = await entryBuffer(archive, entry);
+      records.push(await inspectDocument(entry.fileName, buffer));
+    }
+    return records;
+  } finally {
+    archive.close();
+  }
 }
 
 async function inspectDocument(originalName, buffer) {
@@ -87,6 +120,16 @@ function requiredAbsolutePath(name) {
   const value = process.env[name];
   if (!value || !isAbsolute(value)) throw new Error(`${name} deve apontar para um caminho absoluto privado.`);
   return value;
+}
+
+function optionalExpectedCount() {
+  const value = process.env.PRIVATE_CORPUS_EXPECTED_PDFS?.trim();
+  if (!value) return undefined;
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new Error("PRIVATE_CORPUS_EXPECTED_PDFS deve ser um inteiro positivo.");
+  }
+  return count;
 }
 
 function openArchive(path) {

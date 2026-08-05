@@ -4,13 +4,18 @@ Esta matriz é derivada do inventário privado executado em 2026-08-03. O artefa
 somente hash SHA-256, classificação, família do parser e códigos de diagnóstico; não contém nomes,
 contas, valores, texto ou dados de empresa.
 
-Comando reproduzível (em ambiente autorizado):
+Comando reproduzível por diretório (em ambiente autorizado):
 
 ```powershell
-$env:PRIVATE_CORPUS_ZIP = 'C:\caminho-privado\Extratos_12.zip'
+$env:PRIVATE_CORPUS_DIR = 'C:\caminho-privado\Extratos_12'
 $env:PRIVATE_CORPUS_REPORT = 'C:\caminho-privado\private-corpus-inventory.json'
+$env:PRIVATE_CORPUS_EXPECTED_PDFS = '68'
 pnpm inventory:private-corpus
 ```
+
+Para um arquivo compactado, use `PRIVATE_CORPUS_ZIP` no lugar de `PRIVATE_CORPUS_DIR`. Exatamente
+uma das duas fontes deve ser informada. O relatório versão 2 registra somente hashes, identificadores
+derivados, classificação, adapter e diagnósticos; caminho e nome original nunca são persistidos.
 
 ## Resultado do inventário
 

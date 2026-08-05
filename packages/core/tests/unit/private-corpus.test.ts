@@ -1,5 +1,15 @@
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
-import { createPrivateCorpusRecord, institutionHintFromOriginalName, summarizePrivateCorpus } from "../../src/private-corpus.js";
+import {
+  createPrivateCorpusRecord,
+  institutionHintFromOriginalName,
+  listPrivateCorpusPdfFiles,
+  resolvePrivateCorpusSource,
+  summarizePrivateCorpus,
+} from "../../src/private-corpus.js";
 
 describe("inventário privado do corpus", () => {
   it("cria um identificador estável sem expor o nome ou o conteúdo do documento", () => {
@@ -72,5 +82,37 @@ describe("inventário privado do corpus", () => {
     expect(summary.bySourceInstitution).toEqual({ ITAU: 1, UNKNOWN: 1 });
     expect(summary.byClassification).toEqual({ CURRENT_ACCOUNT: 1, UNKNOWN: 1 });
     expect(summary.byAdapter).toEqual({ ITAU_CURRENT: 1, UNKNOWN: 1 });
+  });
+  it("requires exactly one absolute private source", () => {
+    const directory = resolve("private-corpus");
+    const archive = resolve("private-corpus.zip");
+    expect(resolvePrivateCorpusSource({ directory })).toEqual({ kind: "DIRECTORY", path: directory });
+    expect(resolvePrivateCorpusSource({ archive })).toEqual({ kind: "ZIP", path: archive });
+    expect(() => resolvePrivateCorpusSource({})).toThrow("PRIVATE_CORPUS_DIR or PRIVATE_CORPUS_ZIP");
+    expect(() => resolvePrivateCorpusSource({ directory, archive })).toThrow("exactly one");
+    expect(() => resolvePrivateCorpusSource({ directory: "corpus" })).toThrow("absolute");
+  });
+
+  it("enumerates PDFs recursively, ignores other formats and keeps deterministic order", async () => {
+    const root = await mkdtemp(join(tmpdir(), "private-corpus-"));
+    try {
+      await mkdir(join(root, "institution", "family"), { recursive: true });
+      await writeFile(join(root, "z.pdf"), "%PDF-z");
+      await writeFile(join(root, "institution", "a.PDF"), "%PDF-a");
+      await writeFile(join(root, "institution", "family", "b.pdf"), "%PDF-b");
+      await writeFile(join(root, "institution", "ignore.csv"), "date;value");
+
+      const files = await listPrivateCorpusPdfFiles(root);
+      const canonicalRoot = await realpath(root);
+
+      expect(files.map((file) => file.relativeName)).toEqual([
+        "institution/a.PDF",
+        "institution/family/b.pdf",
+        "z.pdf",
+      ]);
+      expect(files.every((file) => file.absolutePath.startsWith(canonicalRoot))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

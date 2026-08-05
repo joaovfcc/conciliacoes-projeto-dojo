@@ -28,7 +28,10 @@ Atualizado em: 2026-08-04
 
 `inventário → teste RED → implementação GREEN → refatoração → gates → matriz de progresso → próximo layout`
 
-Em andamento: Fase 0 — inventário reprodutível do corpus privado por pasta ou ZIP.
+Concluído em `T02`: inventário reprodutível por pasta ou ZIP, com trava opcional de quantidade. A
+execução privada encontrou 68 PDFs, 68 hashes únicos e persistiu apenas metadados sanitizados.
+
+Em andamento: Fase 0 — matrizes completas de famílias PDF e disponibilidade de formatos.
 
 ## Handoff
 
@@ -38,4 +41,3 @@ Ao retomar:
 2. executar a primeira tarefa não concluída;
 3. atualizar este arquivo e as matrizes de suporte ao fim de cada ciclo;
 4. nunca marcar um resultado contábil esperado sem oráculo privado revisado.
-

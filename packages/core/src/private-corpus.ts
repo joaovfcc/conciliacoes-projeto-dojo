@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readdir, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 import type { DocumentKind } from "./types.js";
 
@@ -36,6 +38,55 @@ export type PrivateCorpusSummary = {
   byClassification: Record<string, number>;
   byAdapter: Record<string, number>;
 };
+
+export type PrivateCorpusSource =
+  | { kind: "DIRECTORY"; path: string }
+  | { kind: "ZIP"; path: string };
+
+export type PrivateCorpusPdfFile = {
+  absolutePath: string;
+  relativeName: string;
+};
+
+export function resolvePrivateCorpusSource(input: { directory?: string; archive?: string }): PrivateCorpusSource {
+  const directory = input.directory?.trim();
+  const archive = input.archive?.trim();
+  const candidates = [directory, archive].filter((value): value is string => Boolean(value));
+  if (candidates.length === 0) {
+    throw new Error("PRIVATE_CORPUS_DIR or PRIVATE_CORPUS_ZIP must point to a private absolute path.");
+  }
+  if (candidates.length !== 1) {
+    throw new Error("Configure exactly one private corpus source: PRIVATE_CORPUS_DIR or PRIVATE_CORPUS_ZIP.");
+  }
+  const path = candidates[0]!;
+  if (!isAbsolute(path)) throw new Error("The private corpus path must be absolute.");
+  return directory ? { kind: "DIRECTORY", path } : { kind: "ZIP", path };
+}
+
+export async function listPrivateCorpusPdfFiles(directory: string): Promise<PrivateCorpusPdfFile[]> {
+  if (!isAbsolute(directory)) throw new Error("The private corpus directory must be absolute.");
+  const root = await realpath(directory);
+  const files: PrivateCorpusPdfFile[] = [];
+
+  async function visit(currentDirectory: string): Promise<void> {
+    const entries = await readdir(currentDirectory, { withFileTypes: true });
+    entries.sort((left, right) => compareText(left.name, right.name));
+    for (const entry of entries) {
+      const absolutePath = join(currentDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(absolutePath);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".pdf")) {
+        files.push({
+          absolutePath,
+          relativeName: relative(root, absolutePath).split(sep).join("/"),
+        });
+      }
+    }
+  }
+
+  await visit(root);
+  return files.sort((left, right) => compareText(left.relativeName, right.relativeName));
+}
 
 export function createPrivateCorpusRecord(input: { originalName: string; buffer: Buffer; outcome: PrivateCorpusOutcome }): PrivateCorpusRecord {
   const sha256 = createHash("sha256").update(input.buffer).digest("hex");
@@ -102,4 +153,8 @@ function countBy(records: readonly PrivateCorpusRecord[], key: (record: PrivateC
 function extensionOf(name: string): string {
   const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
   return extension || "unknown";
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -15,7 +15,7 @@ Cada tarefa usa RED → GREEN → refatoração → gates → commit atômico. `
 
 - [x] `T10` Criar contratos canônicos de formato, adapter, proveniência e issues; seleção de fonte autoritativa segue em `T13`.
 - [x] `T11` Implementar registry pela chave completa e detecção fechada em ambiguidade.
-- [ ] `T12` Implementar pipeline comum de gates e compatibilidade com `parseStatement`/preflight atuais.
+- [x] `T12` Implementar pipeline comum de gates e façade canônica para o modelo atual de parsing/preflight.
 - [ ] `T13` Implementar seleção de fonte única e `SOURCE_CROSSCHECK_FAILED`.
 - [ ] `T14` Provar por testes que matching, relatório e exportação não dependem de PDF ou CSV.
 

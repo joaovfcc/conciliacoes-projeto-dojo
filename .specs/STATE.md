@@ -43,7 +43,10 @@ proveniência sanitizada e chave completa de suporte, com validações unitária
 Concluído em `T11`: registry filtra pelo formato, rejeita chaves completas duplicadas, resolve somente
 versões exatas e bloqueia detecção ambígua por limiar/margem.
 
-Em andamento: `T12` — pipeline comum de gates e façade de compatibilidade.
+Concluído em `T12`: gates comuns de suporte, tipo, identidade, período, estrutura, sinais,
+duplicidades, saldo, mapping e crosscheck; façade sanitizada converte o modelo legado do parser.
+
+Em andamento: `T13` — seleção de fonte autoritativa única e crosscheck PDF/CSV.
 
 ## Handoff
 

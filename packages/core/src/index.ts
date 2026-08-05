@@ -9,3 +9,4 @@ export * from "./private-corpus.js";
 export * from "./private-oracle.js";
 export * from "./corpus-support-matrix.js";
 export * from "./statement-sources.js";
+export * from "./statement-gates.js";

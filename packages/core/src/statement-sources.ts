@@ -65,6 +65,7 @@ export type CanonicalStatementDocument = {
   identity: BankIdentity;
   period?: { start: string; end: string };
   transactions: readonly CanonicalBankTransaction[];
+  declaresNoMovements?: boolean;
   openingBalance?: string;
   closingBalance?: string;
   issues: readonly ImportIssue[];

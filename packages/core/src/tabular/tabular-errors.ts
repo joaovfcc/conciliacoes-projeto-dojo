@@ -1,0 +1,26 @@
+export type TabularErrorCode =
+  | "UNSUPPORTED_TABULAR_FORMAT"
+  | "EMPTY_FILE"
+  | "FILE_SIZE_LIMIT_EXCEEDED"
+  | "INVALID_CSV"
+  | "INVALID_SPREADSHEET"
+  | "CORRUPTED_SPREADSHEET"
+  | "WORKBOOK_WITHOUT_SHEETS"
+  | "SHEET_LIMIT_EXCEEDED"
+  | "ROW_LIMIT_EXCEEDED"
+  | "COLUMN_LIMIT_EXCEEDED"
+  | "CELL_LIMIT_EXCEEDED"
+  | "NO_TRANSACTIONAL_SHEET_FOUND"
+  | "NO_LAYOUT_PROFILE_FOUND"
+  | "NO_HEADER_FOUND"
+  | "REQUIRED_COLUMNS_NOT_FOUND"
+  | "ACCOUNT_IDENTITY_MISMATCH"
+  | "ENCRYPTED_SPREADSHEET_NOT_SUPPORTED"
+  | "FORMULA_WITHOUT_CACHED_VALUE";
+
+export class TabularError extends Error {
+  constructor(public code: TabularErrorCode, message: string) {
+    super(message);
+    this.name = "TabularError";
+  }
+}

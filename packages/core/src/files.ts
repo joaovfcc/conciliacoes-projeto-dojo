@@ -14,6 +14,14 @@ import type {
   StatementClassification,
   StatementRecord,
 } from "./types.js";
+import { parseCsv as parseTabularCsv } from "./tabular/csv-reader.js";
+import { parseSpreadsheet } from "./tabular/spreadsheet-reader.js";
+import { classifySheet } from "./tabular/sheet-classifier.js";
+import { detectLayout } from "./statements/layout-detector.js";
+import { parseStatement as parseStatementGeneric } from "./statements/generic-statement-parser.js";
+import { ITAU_CHECKING_XLSX_V1 } from "./statements/profiles/itau-checking-xlsx-v1.js";
+
+const PROFILES = [ITAU_CHECKING_XLSX_V1];
 
 export type SourceFileInput = {
   id: string;
@@ -63,32 +71,7 @@ const aliasLookup = new Map(
   Object.entries(aliases).flatMap(([canonical, names]) => names.map((name) => [name, canonical])),
 );
 
-type PdfLayout = "BRADESCO_CURRENT" | "BRB_CURRENT" | "SANTANDER_CURRENT" | "SOFISA_CURRENT" | "ITAU_CURRENT" | "BRADESCO_INVESTMENT" | "SANTANDER_INVESTMENT" | "ITAU_INVESTMENT" | "SOFISA_POSITION";
 
-export const registeredPdfLayoutAdapters: readonly FinancialDocumentAdapter[] = [
-  pdfLayoutAdapter("BRADESCO_CURRENT", "CURRENT_ACCOUNT", ["EXTRATO MENSAL / POR PERIODO", "EXTRATO DE:"], "237"),
-  pdfLayoutAdapter("BRB_CURRENT", "CURRENT_ACCOUNT", ["DADOS DA CONTA ORIGEM", "TIPO DE EXTRATO"], "070"),
-  pdfLayoutAdapter("SANTANDER_CURRENT", "CURRENT_ACCOUNT", ["INTERNET BANKING EMPRESARIAL", "CONTA CORRENTE"], "033"),
-  pdfLayoutAdapter("SOFISA_CURRENT", "CURRENT_ACCOUNT", ["EXTRATO 45 DIAS", "ENTRADAS/SAIDAS"]),
-  pdfLayoutAdapter("ITAU_CURRENT", "CURRENT_ACCOUNT", ["EXTRATO DE CONTA CORRENTE", "SALDO RESUMIDO"], "341", ["BANCO SAFRA"]),
-  pdfLayoutAdapter("BRADESCO_INVESTMENT", "INVESTMENT_ACTIVITY", ["EXTRATO DE INVESTIMENTOS", "AGENCIA/CONTA"], "237"),
-  pdfLayoutAdapter("SANTANDER_INVESTMENT", "INVESTMENT_ACTIVITY", ["EXTRATO DE MOVIMENTO E POSICAO"] , "033"),
-  pdfLayoutAdapter("ITAU_INVESTMENT", "INVESTMENT_ACTIVITY", ["ITAU", "APLIC AUT MAIS", "EXTRATO DETALHADO DE MOVIMENTACAO"], "341", ["BANCO SAFRA"]),
-  pdfLayoutAdapter("SOFISA_POSITION", "INVESTMENT_POSITION", ["CONSULTA DE POSICAO", "RENDA FIXA"]),
-];
-
-const pdfAdapterRegistry = new FinancialDocumentAdapterRegistry(registeredPdfLayoutAdapters);
-const pdfLayoutsByAdapterId: Record<string, PdfLayout> = {
-  BRADESCO_CURRENT: "BRADESCO_CURRENT",
-  BRB_CURRENT: "BRB_CURRENT",
-  SANTANDER_CURRENT: "SANTANDER_CURRENT",
-  SOFISA_CURRENT: "SOFISA_CURRENT",
-  ITAU_CURRENT: "ITAU_CURRENT",
-  BRADESCO_INVESTMENT: "BRADESCO_INVESTMENT",
-  SANTANDER_INVESTMENT: "SANTANDER_INVESTMENT",
-  ITAU_INVESTMENT: "ITAU_INVESTMENT",
-  SOFISA_POSITION: "SOFISA_POSITION",
-};
 
 export async function preflightFiles(
   ledgerFile: SourceFileInput,
@@ -185,6 +168,12 @@ async function parseStatement(
   const extension = extensionOf(file.originalName);
   if (extension === "ofx") return parseOfx(file);
   if (extension === "pdf") return parsePdf(file, ocrProvider, options.maxPdfPages);
+  
+  if (["csv", "xlsx", "xls", "xlsm"].includes(extension)) {
+     return parseTabularStatement(file);
+  }
+  
+  // Fallback para outros tipos de texto (se existirem, como o antigo tabularRows genérico)
   const rows = await tabularRows(file);
   const issues: ImportIssue[] = [];
   const records: StatementRecord[] = [];
@@ -209,6 +198,59 @@ async function parseStatement(
     }
   }
   const metadata = statementMetadata(file, records, "TABULAR", "TABULAR_V1");
+  return { records, metadata, issues, investments: [] };
+}
+
+async function parseTabularStatement(file: SourceFileInput): Promise<{ records: StatementRecord[]; metadata: DetectedStatement; issues: ImportIssue[]; investments: InvestmentEntry[] }> {
+  const extension = extensionOf(file.originalName).toUpperCase();
+  const format = extension === "CSV" ? "CSV" : (extension as "XLSX" | "XLS" | "XLSM");
+  
+  let doc;
+  if (format === "CSV") {
+    doc = parseTabularCsv({ buffer: file.buffer, fileName: file.originalName });
+  } else {
+    doc = parseSpreadsheet({ buffer: file.buffer, sourceFormat: format, fileName: file.originalName });
+  }
+  
+  const issues: ImportIssue[] = [];
+  const records: StatementRecord[] = [];
+  
+  for (const sheet of doc.sheets) {
+    const classification = classifySheet(sheet);
+    if (classification.role !== "TRANSACTIONAL") {
+       continue;
+    }
+    
+    const layoutMatch = detectLayout(sheet, PROFILES, format);
+    if (!layoutMatch) {
+       issues.push(issue("WARNING", "LAYOUT_NOT_DETECTED", `Layout não reconhecido na aba ${sheet.name}`, file.id));
+       continue;
+    }
+    
+    const profile = PROFILES.find(p => p.id === layoutMatch.profileId)!;
+    const parsed = parseStatementGeneric(sheet, profile, layoutMatch.headerRowIndex, format, file.originalName);
+    
+    for (const tx of parsed.transactions) {
+      records.push(statementRecord(file, tx.evidence.rowNumber, {
+        date: tx.date,
+        document: tx.document || "",
+        history: tx.description,
+        value: money(tx.direction === "DEBIT" ? -tx.amount : tx.amount),
+        sourceId: "", // Not robust enough yet
+        bank: profile.bankCode,
+        agency: "", // Not extracted yet
+        account: "",
+        extractionMethod: "TABULAR",
+        parser: profile.id
+      }));
+    }
+  }
+  
+  if (records.length === 0) {
+    issues.push(issue("ERROR", "TABULAR_SEM_MOVIMENTOS", "Nenhum movimento conciliável encontrado no arquivo tabular.", file.id));
+  }
+  
+  const metadata = statementMetadata(file, records, "TABULAR", records[0]?.evidence?.parser || "GENERIC_TABULAR");
   return { records, metadata, issues, investments: [] };
 }
 
@@ -248,6 +290,16 @@ type PdfPage = { page: number; text: string; confidence: string; method: Extract
 type PdfDetails = { bank: string; agency: string; account: string; periods: string[]; finalBalance?: string };
 type PdfStatementResult = { records: StatementRecord[]; investments: InvestmentEntry[]; metadata: DetectedStatement; issues: ImportIssue[] };
 
+import { v2AdapterRegistry } from "./adapters/index.js";
+import type { ExtractedStatementSource, CanonicalStatementDocument } from "./statement-sources.js";
+export function statementParseErrorFromPdfOpen(error: unknown): StatementParseError {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "PasswordException") {
+    return new StatementParseError("PDF_PASSWORD_PROTECTED", "O PDF está protegido por senha. Exporte uma cópia sem proteção antes de enviá-la.");
+  }
+  return new StatementParseError("PDF_INVALID", "O PDF não pôde ser lido com segurança.");
+}
+
 async function parsePdf(file: SourceFileInput, ocrProvider?: OcrProvider, maxPages?: number): Promise<PdfStatementResult> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   let document;
@@ -275,13 +327,22 @@ async function parsePdf(file: SourceFileInput, ocrProvider?: OcrProvider, maxPag
     }
   }
   pages.sort((left, right) => left.page - right.page);
-  let allText = pages.map((item) => item.text).join("\n");
-  let layout;
-  try {
-    layout = detectPdfLayout(allText);
-  } catch (error) {
+
+  let source: ExtractedStatementSource & { format: "PDF" } = {
+    sourceId: file.id,
+    format: "PDF",
+    sha256: createHash("sha256").update(new Uint8Array(file.buffer)).digest("hex"),
+    pages: pages.map(p => ({
+      page: p.page,
+      text: p.text,
+      method: p.method === "TEXT" || p.method === "OCR" ? p.method : "TEXT"
+    }))
+  };
+
+  let selection = v2AdapterRegistry.select(source);
+  if (selection.status === "UNSUPPORTED") {
     const textPages = pages.filter((page) => page.method === "TEXT").map((page) => page.page);
-    if (!(error instanceof StatementParseError) || error.code !== "PDF_LAYOUT_UNSUPPORTED" || !ocrProvider || textPages.length === 0) throw error;
+    if (!ocrProvider || textPages.length === 0) throw new StatementParseError("PDF_LAYOUT_UNSUPPORTED", "O layout deste PDF ainda não é reconhecido com segurança.");
     let replacement: OcrPage[];
     try { replacement = await ocrProvider(file, textPages); }
     catch { throw new StatementParseError("PDF_OCR_UNAVAILABLE", "Este PDF precisa de OCR, mas o OCR em português não está disponível neste ambiente."); }
@@ -290,311 +351,133 @@ async function parsePdf(file: SourceFileInput, ocrProvider?: OcrProvider, maxPag
       const ocr = byPage.get(page.page);
       if (ocr) Object.assign(page, { text: ocr.text, confidence: ocr.confidence, method: "OCR" as const });
     }
-    allText = pages.map((item) => item.text).join("\n");
-    layout = detectPdfLayout(allText);
+    source = {
+      ...source,
+      pages: pages.map(p => ({
+        page: p.page,
+        text: p.text,
+        method: p.method === "TEXT" || p.method === "OCR" ? p.method : "TEXT"
+      }))
+    };
+    selection = v2AdapterRegistry.select(source);
   }
-  const method = extractionMethodOf(pages);
-  const confidences = pages.map((item) => item.confidence);
-  switch (layout) {
-    case "BRADESCO_CURRENT": return parseBradescoCurrent(file, pages, method, confidences);
-    case "BRB_CURRENT": return parseBrbCurrent(file, pages, method, confidences);
-    case "SANTANDER_CURRENT": return parseSantanderCurrent(file, pages, method, confidences);
-    case "SOFISA_CURRENT": return parseSofisaCurrent(file, pages, method, confidences);
-    case "ITAU_CURRENT": return parseItauCurrent(file, pages, method, confidences);
-    case "BRADESCO_INVESTMENT": return parseBradescoInvestment(file, pages, method, confidences);
-    case "SANTANDER_INVESTMENT": return parseSantanderInvestment(file, pages, method, confidences);
-    case "ITAU_INVESTMENT": return parseItauInvestment(file, pages, method, confidences);
-    case "SOFISA_POSITION": return parseSofisaPosition(file, pages, method, confidences);
-  }
-}
 
-export function statementParseErrorFromPdfOpen(error: unknown): StatementParseError {
-  const name = error instanceof Error ? error.name : "";
-  if (name === "PasswordException") {
-    return new StatementParseError("PDF_PASSWORD_PROTECTED", "O PDF está protegido por senha. Exporte uma cópia sem proteção antes de enviá-la.");
-  }
-  return new StatementParseError("PDF_INVALID", "O PDF não pôde ser lido com segurança.");
-}
-
-function detectPdfLayout(text: string): PdfLayout {
-  const selection = pdfAdapterRegistry.select({ fileId: "", originalName: "", text });
   if (selection.status === "AMBIGUOUS") throw new StatementParseError("DOCUMENT_CLASSIFICATION_AMBIGUOUS", "O banco ou o tipo de documento não pôde ser identificado com segurança.");
   if (selection.status === "UNSUPPORTED") throw new StatementParseError("PDF_LAYOUT_UNSUPPORTED", "O layout deste PDF ainda não é reconhecido com segurança.");
-  const layout = pdfLayoutsByAdapterId[selection.adapter.id];
-  if (!layout) throw new StatementParseError("PDF_LAYOUT_UNSUPPORTED", "O adapter selecionado não possui um parser registrado.");
-  return layout;
+
+  const doc = await selection.adapter.parse(source);
+  return adaptCanonicalToLegacyResult(file, pages, doc);
 }
 
-function pdfLayoutAdapter(id: PdfLayout, kind: StatementClassification, signatures: string[], bankCode?: string, negativeSignatures: string[] = []): FinancialDocumentAdapter {
-  const contract = {
-    layoutFamily: id,
-    positiveSignatures: signatures,
-    negativeSignatures,
-    balanceEvidenceStrategy: kind === "CURRENT_ACCOUNT" ? "RUNNING_BALANCE_WHEN_AVAILABLE" : kind === "INVESTMENT_POSITION" ? "FINAL_POSITION_ONLY" : "NOT_APPLICABLE",
-  } as const;
-  return {
-    id,
-    version: "1",
-    kind,
-    contract,
-    detect: (input) => {
-      const upper = normalizeAscii(input.text).toUpperCase();
-      const positiveMatches = contract.positiveSignatures.filter((signature) => upper.includes(signature));
-      const negativeMatches = contract.negativeSignatures.filter((signature) => upper.includes(signature));
-      return scoredEvidence(kind, positiveMatches.length === contract.positiveSignatures.length ? 100 : positiveMatches.length * 20, positiveMatches, negativeMatches, bankCode);
-    },
-  };
-}
-
-function parseBradescoCurrent(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("BRADESCO", allText, /EXTRATO\s+DE:\s*AG\.?\s*:?\s*([0-9]+)\s*\|\s*CC\s*:?\s*([0-9\s-]+)/i);
-  const records: StatementRecord[] = [];
-  let currentDate = "";
-  for (const page of pages) {
-    const lines = pageLines(page.text);
-    const header = lines.findIndex((line) => /DATA\s+LANCAMENTO.*CREDITO.*DEBITO.*SALDO/i.test(normalizeAscii(line)));
-    if (header < 0 && !records.length) continue;
-    let current: { date: string; document: string; history: string[]; value: string; runningBalance: string; line: number } | undefined;
-    const pending: string[] = [];
-    const flush = () => {
-      if (!current) return;
-      records.push(pdfRecord(file, page, current.line, {
-        date: current.date,
-        document: current.document,
-        history: current.history.join(" "),
-        value: current.value,
-        runningBalance: current.runningBalance,
-        bank: details.bank,
-        agency: details.agency,
-        account: details.account,
-        parser: "BRADESCO_NET_EMPRESA_CC_V1",
-      }));
-      current = undefined;
-    };
-    for (const [lineIndex, line] of lines.entries()) {
-      if (header >= 0 && lineIndex <= header) continue;
-      if (/^(TOTAL\b|ULTIMOS LANCAMENTOS|SALDOS INVEST)/i.test(normalizeAscii(line))) { flush(); break; }
-      if (!line || /SALDO ANTERIOR|DADOS ACIMA|EXTRATO DE:/i.test(line)) continue;
-      const match = /^(?:(\d{2}\/\d{2}\/\d{4})\s+)?(?:(.*?)\s+)?(\d{5,8})\s+(-?[\d.]+,\d{2})\s+(-?[\d.]+,\d{2})$/.exec(line);
-      if (match) {
-        flush();
-        currentDate = match[1] || currentDate;
-        if (!currentDate) continue;
-        current = { date: currentDate, document: match[3]!, history: [...pending, match[2] ?? ""].filter(Boolean), value: match[4]!, runningBalance: match[5]!, line: lineIndex + 1 };
-        pending.length = 0;
-      } else if (current) current.history.push(line);
-      else pending.push(line);
-    }
-    flush();
-  }
-  return currentAccountResult(file, records, details, method, confidences, "BRADESCO_NET_EMPRESA_CC_V1", allText);
-}
-
-function parseBrbCurrent(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("BRB", allText, /NUMERO\s+DA\s+CONTA\s*\n?\s*([0-9.\-]+)/i);
-  const records: StatementRecord[] = [];
-  for (const page of pages) {
-    const lines = pageLines(page.text);
-    for (let index = 0; index < lines.length; index += 1) {
-      const singleLine = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d{6,})\s+([\d.]+,\d{2})\s*([+-])\s+([\d.]+,\d{2})$/.exec(lines[index]!);
-      if (singleLine) {
-        const history = singleLine[2]!.trim();
-        if (!/\bSALDO\b/i.test(history)) {
-          records.push(pdfRecord(file, page, index + 1, {
-            date: singleLine[1]!, document: singleLine[3]!, history,
-            value: `${singleLine[5] === "-" ? "-" : ""}${singleLine[4]!}`,
-            runningBalance: singleLine[6]!,
-            bank: details.bank, agency: details.agency, account: details.account, parser: "BRB_CC_DETALHADO_V1",
-          }));
-        }
-        continue;
-      }
-      const date = /^(\d{2}\/\d{2}\/\d{4})$/.exec(lines[index]!);
-      if (!date) continue;
-      const nextDate = lines.findIndex((line, offset) => offset > index && /^\d{2}\/\d{2}\/\d{4}$/.test(line));
-      const end = nextDate < 0 ? lines.length : nextDate;
-      const block = lines.slice(index + 1, end);
-      const documentIndex = block.findIndex((line) => /^\d{6}$/.test(line));
-      if (documentIndex < 0) continue;
-      const valueIndex = block.findIndex((line, offset) => offset > documentIndex && /^[\d.]+,\d{2}$/.test(line));
-      if (valueIndex < 0) continue;
-      const sign = block[valueIndex + 1] === "-" ? "-" : "";
-      const runningBalance = /^[-]?[\d.]+,\d{2}$/.test(block[valueIndex + 2] ?? "") ? block[valueIndex + 2] : undefined;
-      const history = block.slice(0, documentIndex).filter((line) => !/^\d{4}$/.test(line)).join(" ");
-      if (!history || /SALDO/i.test(history)) continue;
-      records.push(pdfRecord(file, page, index + 1, {
-        date: date[1]!, document: block[documentIndex]!, history, value: `${sign}${block[valueIndex]!}`,
-        ...(runningBalance ? { runningBalance } : {}),
-        bank: details.bank, agency: details.agency, account: details.account, parser: "BRB_CC_DETALHADO_V1",
-      }));
-    }
-  }
-  return currentAccountResult(file, records, details, method, confidences, "BRB_CC_DETALHADO_V1", allText);
-}
-
-function parseSantanderCurrent(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("SANTANDER", allText, /AGENCIA\s*:\s*([0-9]+)\s+CONTA\s*:\s*([0-9\s-]+)/i);
-  const records = parseSingleLineRecords(file, pages, details, "SANTANDER_IBE_CC_V1", /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(-?[\d.]+,\d{2})(?:\s+-?[\d.]+,\d{2})?$/);
-  return currentAccountResult(file, records, details, method, confidences, "SANTANDER_IBE_CC_V1", allText);
-}
-
-function parseSofisaCurrent(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("SOFISA", allText, /AGENCIA\s*:\s*([0-9]+)\s+CONTA\s*:\s*([0-9\s-]+)/i);
-  const records: StatementRecord[] = [];
-  for (const page of pages) {
-    for (const [index, line] of pageLines(page.text).entries()) {
-      if (/^SALDO\s+DISPONIVEL/i.test(normalizeAscii(line))) continue;
-      const match = /^(\d{2}\/\d{2}\/\d{2})\s+\d+\s+(.+?)\s+(\d{5,8})\s+(-\s*)?([\d.]+,\d{2})$/.exec(line);
-      if (!match) continue;
-      records.push(pdfRecord(file, page, index + 1, {
-        date: `${match[1]!.slice(0, 6)}20${match[1]!.slice(6)}`,
-        document: match[3]!, history: match[2]!, value: `${match[4] ? "-" : ""}${match[5]!}`,
-        bank: details.bank, agency: details.agency, account: details.account, parser: "SOFISA_NET_CC_V1",
-      }));
-    }
-  }
-  return currentAccountResult(file, records, details, method, confidences, "SOFISA_NET_CC_V1", allText);
-}
-
-function parseItauCurrent(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("ITAU", allText, /AG[EE]NCIA\s*:?\s*([0-9]+).*?CONTA\s*:?\s*([0-9\s-]+)/is);
-  const transactionPattern = /^(\d{2}\/\d{2}(?:\/\d{4})?)\s+(.+?)\s+(-?[\d.]+,\d{2})\s*(-)?$/;
-  const ignored = (line: string) => /(?:SALDO\s+(?:ANTERIOR|DO\s+DIA|FINAL|DISPONIVEL)|SDO\s+CTA\/APL)/i.test(line);
-  const records = parseSingleLineRecords(file, pages, details, "ITAU_EMPRESAS_CC_V2", transactionPattern, ignored);
-  const issues = pages.flatMap((page) => pageLines(page.text).flatMap((line, index) => /^\d{2}\/\d{2}\b/.test(line) && !ignored(line) && !transactionPattern.test(line) ? [issue("WARNING", "OCR_LINHA_INCOMPLETA", "Uma linha do extrato Itaú não foi usada porque o OCR não identificou um valor monetário completo.", file.id, `página ${page.page}, linha ${index + 1}`)] : []));
-  const result = currentAccountResult(file, records, details, method, confidences, "ITAU_EMPRESAS_CC_V2", allText);
-  return { ...result, issues: [...result.issues, ...issues] };
-}
-
-function parseBradescoInvestment(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("BRADESCO", allText, /([0-9]+)\s*\|\s*([0-9\s-]+)\s*AGENCIA\/CONTA/i);
-  const investments = parseDatedInvestmentRows(file, pages, details, "BRADESCO_NET_EMPRESA_INVEST_V1", (line) => /\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}/.test(line) ? (/\s-\s/.test(line) ? "APPLICATION" : "REDEMPTION") : undefined);
-  return investmentResult(file, investments, details, method, confidences, "BRADESCO_NET_EMPRESA_INVEST_V1", "INVESTMENT_ACTIVITY");
-}
-
-function parseSantanderInvestment(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("SANTANDER", allText, /AGENCIA\s*:\s*([0-9]+)\s+CONTA\s*:\s*([0-9\s-]+)/i);
-  const investments: InvestmentEntry[] = [];
-  for (const page of pages) for (const [index, line] of pageLines(page.text).entries()) {
-    const match = /^(\d{2}\/\d{2}\/\d{4})\s+(.+)$/.exec(line);
-    if (!match) continue;
-    const values = match[2]!.match(/-?[\d.]+,\d{2}/g) ?? [];
-    if (values.length < 7) continue;
-    if (!isZero(values[0]!)) investments.push(investmentEntry(file, page, index + 1, details, "APPLICATION", values[0]!, "Aplicação automática", "SANTANDER_IBE_INVEST_V1", match[1]!));
-    if (!isZero(values[5]!)) investments.push(investmentEntry(file, page, index + 1, details, "REDEMPTION", values[5]!, "Resgate automático", "SANTANDER_IBE_INVEST_V1", match[1]!));
-    if (!isZero(values[6]!)) investments.push(investmentEntry(file, page, index + 1, details, "EARNING", values[6]!, "Rendimento pago", "SANTANDER_IBE_INVEST_V1", match[1]!));
-  }
-  return investmentResult(file, investments, details, method, confidences, "SANTANDER_IBE_INVEST_V1", "INVESTMENT_ACTIVITY");
-}
-
-function parseItauInvestment(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("ITAU", allText, /(?:AG[EE]NCIA\s*:?\s*|AG[EE]NCIA\/CONTA\s*:?\s*)([0-9]+)(?:\s*-|.*?CONTA\s*:?\s*)([0-9\s-]+)/is);
-  const investments = parseDatedInvestmentRows(file, pages, details, "ITAU_APLIC_AUT_MAIS_V1", (line) => /^\d{2}\/\d{2}\/\d{4}\s+R/i.test(line) || /RESG|VENC/i.test(normalizeAscii(line)) ? "REDEMPTION" : /REND|RENTAB/i.test(normalizeAscii(line)) ? "EARNING" : /^\d{2}\/\d{2}\/\d{4}\s+A/i.test(line) || /APLIC/i.test(normalizeAscii(line)) ? "APPLICATION" : undefined);
-  return investmentResult(file, investments, details, method, confidences, "ITAU_APLIC_AUT_MAIS_V1", "INVESTMENT_ACTIVITY");
-}
-
-function parseSofisaPosition(file: SourceFileInput, pages: PdfPage[], method: ExtractionMethod, confidences: string[]): PdfStatementResult {
-  const allText = pages.map((page) => page.text).join("\n");
-  const details = bankDetails("SOFISA", allText, /AGENCIA\s*:\s*([0-9]+)\s+CONTA\s*:\s*([0-9\s-]+)/i);
-  const finalBalance = /VALOR\s+LIQUIDO\s+TOTAL\s+R\$\s*([\d.]+,\d{2})/i.exec(normalizeAscii(allText))?.[1];
-  const date = /(\d{2}\/\d{2}\/\d{4})/.exec(allText)?.[1];
-  const investments = finalBalance ? [investmentEntry(file, pages[0]!, 1, details, "POSITION", finalBalance, "Posição líquida de renda fixa", "SOFISA_RENDA_FIXA_POSICAO_V1", date)] : [];
-  return investmentResult(file, investments, { ...details, ...(finalBalance ? { finalBalance } : {}) }, method, confidences, "SOFISA_RENDA_FIXA_POSICAO_V1", "INVESTMENT_POSITION");
-}
-
-function parseSingleLineRecords(file: SourceFileInput, pages: PdfPage[], details: PdfDetails, parser: string, pattern: RegExp, shouldSkip: (line: string) => boolean = (line) => /\bSALDO\b/i.test(line)): StatementRecord[] {
-  const records: StatementRecord[] = [];
-  const year = inferYear(pages.map((page) => page.text).join("\n"));
-  for (const page of pages) for (const [index, line] of pageLines(page.text).entries()) {
-    if (shouldSkip(line)) continue;
-    const match = pattern.exec(line);
-    if (!match) continue;
-    const rawDate = match[1]!;
-    const date = rawDate.length === 5 ? `${rawDate}/${year}` : rawDate;
-    const negative = match[4] === "-" || match[3]!.startsWith("-");
-    const body = match[2]!.trim().split(/\s+/);
-    const document = /^\d{4,8}$/.test(body.at(-1) ?? "") ? body.pop()! : "";
-    records.push(pdfRecord(file, page, index + 1, {
-      date, document, history: body.join(" "), value: `${negative ? "-" : ""}${match[3]!.replace(/^-/, "")}`,
-      bank: details.bank, agency: details.agency, account: details.account, parser,
-    }));
-  }
-  return records;
-}
-
-function parseDatedInvestmentRows(file: SourceFileInput, pages: PdfPage[], details: PdfDetails, parser: string, classify: (line: string) => InvestmentEntry["kind"] | undefined): InvestmentEntry[] {
-  const entries: InvestmentEntry[] = [];
-  for (const page of pages) for (const [index, line] of pageLines(page.text).entries()) {
-    const kind = classify(line);
-    const date = /^(\d{2}\/\d{2}\/\d{4})/.exec(line)?.[1];
-    const values = line.match(/-?[\d.]+,\d{2}/g) ?? [];
-    if (!kind || !date || !values.length) continue;
-    entries.push(investmentEntry(file, page, index + 1, details, kind, values[0]!, kind === "APPLICATION" ? "Aplicação" : kind === "REDEMPTION" ? "Resgate/Vencimento" : "Rendimento", parser, date));
-  }
-  return entries;
-}
-
-function currentAccountResult(file: SourceFileInput, records: StatementRecord[], details: PdfDetails, method: ExtractionMethod, confidences: string[], parser: string, documentText: string): PdfStatementResult {
-  const normalizedText = normalizeAscii(documentText).toUpperCase();
-  const hasExplicitNoMovements = normalizedText.includes("SEM MOVIMENT") || normalizedText.includes("NAO HOUVE LANC") || normalizedText.includes("SEM TRANSAC");
-  const balanceCheck = calculateBalanceCheck(records.map((record) => ({ amount: record.value, ...(record.runningBalance ? { runningBalance: record.runningBalance } : {}) })));
-  const issues = records.length
-    ? []
-    : hasExplicitNoMovements
-      ? [issue("WARNING", "EXTRATO_SEM_MOVIMENTOS", "O extrato declara explicitamente que não houve lançamentos no período.", file.id)]
-      : [issue("ERROR", "STATEMENT_MOVEMENTS_NOT_EXTRACTED", "O extrato não possui movimentos extraídos nem uma declaração explícita de ausência de lançamentos.", file.id)];
-  if (balanceCheck.status === "FAILED") issues.push(issue("ERROR", "BALANCE_INTEGRITY_FAILED", "Os saldos acumulados extraídos não são compatíveis com os movimentos do extrato.", file.id));
-  else if (records.length && balanceCheck.status === "NOT_AVAILABLE") issues.push(issue("WARNING", "BALANCE_CONTROL_NOT_AVAILABLE", "O layout não forneceu saldos acumulados suficientes para validar a completude matemática.", file.id));
-  return { records, investments: [], metadata: detectedStatement(file, details, records, method, confidences, parser, "CURRENT_ACCOUNT", true), issues };
-}
-
-function investmentResult(file: SourceFileInput, investments: InvestmentEntry[], details: PdfDetails, method: ExtractionMethod, confidences: string[], parser: string, classification: StatementClassification): PdfStatementResult {
-  const message = classification === "INVESTMENT_POSITION" ? "O documento contém uma posição de investimento para conferência e não será conciliado lançamento a lançamento." : "Os movimentos de investimento são informativos e não serão conciliados com o razão.";
-  const periods = unique(investments.flatMap((item) => item.date ? [periodOf(item.date)] : []));
-  return { records: [], investments, metadata: detectedStatement(file, { ...details, periods: periods.length ? periods : details.periods }, [], method, confidences, parser, classification, false, investments.length), issues: [issue("WARNING", classification === "INVESTMENT_POSITION" ? "POSICAO_INVESTIMENTO_INFORMATIVA" : "MOVIMENTOS_INVESTIMENTO_INFORMATIVOS", message, file.id)] };
-}
-
-function detectedStatement(file: SourceFileInput, details: PdfDetails, records: StatementRecord[], method: ExtractionMethod, confidences: string[], parser: string, classification: StatementClassification, reconciliationEligible: boolean, recordCount = records.length): DetectedStatement {
+function adaptCanonicalToLegacyResult(file: SourceFileInput, pages: PdfPage[], doc: CanonicalStatementDocument): PdfStatementResult {
+  const method = extractionMethodOf(pages);
+  const confidences = pages.map((item) => item.confidence);
   const confidence = confidences.length ? money(confidences.reduce((sum, item) => sum + Number(item), 0) / confidences.length) : undefined;
-  const recordPeriods = unique(records.map((item) => periodOf(item.date)));
-  const detailPeriods = details.periods.filter((item) => /^\d{6}$/.test(item));
-  return { fileId: file.id, originalName: file.originalName, bank: details.bank, agency: details.agency, account: details.account, periods: recordPeriods.length ? recordPeriods : detailPeriods, recordCount, extractionMethod: method, parser, classification, reconciliationEligible, balanceCheck: calculateBalanceCheck(records.map((record) => ({ amount: record.value, ...(record.runningBalance ? { runningBalance: record.runningBalance } : {}) }))), ...(details.finalBalance ? { finalBalance: money(parseMoney(details.finalBalance)) } : {}), ...(confidence ? { confidence } : {}) };
-}
 
-function bankDetails(bank: string, text: string, matcher: RegExp): PdfDetails {
-  const match = matcher.exec(normalizeAscii(text));
-  const agency = match?.[1]?.replace(/\D/g, "") ?? "";
-  const account = match?.[2]?.replace(/\s+/g, "").trim().replace(/\s+/g, "") ?? match?.[1]?.replace(/\s+/g, "") ?? "";
-  return { bank, agency: matcher.source.includes("NUMERO") ? "" : agency, account, periods: periodsIn(text) };
-}
+  const issues: ImportIssue[] = doc.issues.map(i => issue(i.severity, i.code, i.message, file.id));
 
-function periodsIn(text: string): string[] {
-  const values = [...text.matchAll(/\b(\d{2})\/(\d{2})\/(20\d{2})\b/g)].map((match) => `${match[3]}${match[2]}`);
-  return unique(values);
-}
+  const records: StatementRecord[] = doc.transactions.map((tx, idx) => {
+    const pageIndex = (tx.provenance as any)?.page || 1;
+    const pageObj = pages.find(p => p.page === pageIndex) || pages[0]!;
+    return {
+      id: stableId("STATEMENT", file.id, idx + 1),
+      bank: doc.identity.bankName || "",
+      agency: doc.identity.agency?.normalized || "",
+      bankAccount: doc.identity.account?.normalized || "",
+      date: tx.postingDate,
+      document: tx.documentNumber || "",
+      history: tx.description,
+      value: money(parseMoney(tx.amount)),
+      ...(tx.runningBalance ? { runningBalance: money(parseMoney(tx.runningBalance)) } : {}),
+      sourceId: stableId("SOURCE", file.id, idx + 1),
+      evidence: {
+        fileId: file.id,
+        originalName: file.originalName,
+        extractionMethod: pageObj.method,
+        parser: doc.adapterId + "_V" + doc.adapterVersion,
+        line: idx + 1,
+        page: pageObj.page,
+        sourceText: tx.description,
+        confidence: pageObj.confidence,
+      }
+    };
+  });
 
-function pdfRecord(file: SourceFileInput, page: PdfPage, line: number, data: { date: string; document: string; history: string; value: string; runningBalance?: string; bank: string; agency: string; account: string; parser: string }): StatementRecord {
-  return statementRecord(file, `${page.page}:${line}`, { ...data, date: parseDate(data.date), value: money(parseMoney(data.value)), ...(data.runningBalance ? { runningBalance: money(parseMoney(data.runningBalance)) } : {}), sourceId: "", extractionMethod: page.method, page: page.page, sourceText: data.history, confidence: page.confidence });
-}
+  const investments: InvestmentEntry[] = (doc.investments || []).map((inv, idx) => {
+    const pageIndex = (inv.provenance as any)?.page || 1;
+    const pageObj = pages.find(p => p.page === pageIndex) || pages[0]!;
+    return {
+      id: stableId("INVESTMENT", file.id, `${idx + 1}:${inv.kind}`),
+      fileId: file.id,
+      originalName: file.originalName,
+      bank: doc.identity.bankName || "",
+      agency: doc.identity.agency?.normalized || "",
+      account: doc.identity.account?.normalized || "",
+      ...(inv.postingDate ? { date: inv.postingDate } : {}),
+      kind: inv.kind as "APPLICATION" | "REDEMPTION" | "EARNING" | "POSITION",
+      amount: money(parseMoney(inv.amount)),
+      description: inv.description,
+      evidence: {
+        fileId: file.id,
+        originalName: file.originalName,
+        page: pageObj.page,
+        line: idx + 1,
+        sourceText: inv.description,
+        extractionMethod: pageObj.method,
+        parser: doc.adapterId + "_V" + doc.adapterVersion,
+        confidence: pageObj.confidence,
+      }
+    };
+  });
 
-function investmentEntry(file: SourceFileInput, page: PdfPage, line: number, details: PdfDetails, kind: InvestmentEntry["kind"], amount: string, description: string, parser: string, date?: string): InvestmentEntry {
-  return { id: stableId("INVESTMENT", file.id, `${page.page}:${line}:${kind}`), fileId: file.id, originalName: file.originalName, bank: details.bank, agency: details.agency, account: details.account, ...(date ? { date: parseDate(date) } : {}), kind, amount: money(parseMoney(amount)), description, evidence: { fileId: file.id, originalName: file.originalName, page: page.page, line, sourceText: description, extractionMethod: page.method, parser, confidence: page.confidence } };
+  const periodStrings = [
+    ...(doc.period?.start ? [periodOf(doc.period.start)] : []),
+    ...(doc.period?.end ? [periodOf(doc.period.end)] : []),
+  ];
+
+  const balanceCheck = calculateBalanceCheck(records.map((record) => ({ amount: record.value, ...(record.runningBalance ? { runningBalance: record.runningBalance } : {}) })));
+
+  if (doc.documentType === "CURRENT_ACCOUNT") {
+    if (records.length === 0) {
+      if (doc.declaresNoMovements) {
+        issues.push(issue("WARNING", "EXTRATO_SEM_MOVIMENTOS", "O extrato declara explicitamente que não houve lançamentos no período.", file.id));
+      } else {
+        issues.push(issue("ERROR", "STATEMENT_MOVEMENTS_NOT_EXTRACTED", "O extrato não possui movimentos extraídos nem uma declaração explícita de ausência de lançamentos.", file.id));
+      }
+    }
+    if (balanceCheck.status === "FAILED") {
+      issues.push(issue("ERROR", "BALANCE_INTEGRITY_FAILED", "Os saldos acumulados extraídos não são compatíveis com os movimentos do extrato.", file.id));
+    } else if (records.length && balanceCheck.status === "NOT_AVAILABLE") {
+      issues.push(issue("WARNING", "BALANCE_CONTROL_NOT_AVAILABLE", "O layout não forneceu saldos acumulados suficientes para validar a completude matemática.", file.id));
+    }
+  } else if (doc.documentType === "INVESTMENT_POSITION") {
+    issues.push(issue("WARNING", "POSICAO_INVESTIMENTO_INFORMATIVA", "O documento contém uma posição de investimento para conferência e não será conciliado lançamento a lançamento.", file.id));
+  } else if (doc.documentType === "INVESTMENT_ACTIVITY") {
+    issues.push(issue("WARNING", "MOVIMENTOS_INVESTIMENTO_INFORMATIVOS", "Os movimentos de investimento são informativos e não serão conciliados com o razão.", file.id));
+  }
+
+  const metadata: DetectedStatement = {
+    fileId: file.id,
+    originalName: file.originalName,
+    bank: doc.identity.bankName || "",
+    agency: doc.identity.agency?.normalized || "",
+    account: doc.identity.account?.normalized || "",
+    periods: unique(periodStrings),
+    recordCount: records.length || investments.length,
+    extractionMethod: method,
+    parser: doc.adapterId + "_V" + doc.adapterVersion,
+    classification: doc.documentType as StatementClassification,
+    reconciliationEligible: doc.documentType === "CURRENT_ACCOUNT",
+    balanceCheck,
+    ...(doc.closingBalance ? { finalBalance: money(parseMoney(doc.closingBalance)) } : {}),
+    ...(confidence ? { confidence } : {})
+  };
+
+  return { records, investments, metadata, issues };
 }
 
 function extractionMethodOf(pages: PdfPage[]): ExtractionMethod {
   return pages.some((item) => item.method === "OCR") && pages.some((item) => item.method === "TEXT") ? "MIXED" : pages.some((item) => item.method === "OCR") ? "OCR" : "TEXT";
-}
-
-function pageLines(text: string): string[] {
-  return text.split(/\r?\n/).map((line) => line.trim().replace(/(?<=\d)\s+([.,])\s*(?=\d)/g, "$1").replace(/(?<=\d[.,])\s+(?=\d)/g, "")).filter(Boolean);
 }
 
 function isZero(value: string): boolean { return parseMoney(value).isZero(); }

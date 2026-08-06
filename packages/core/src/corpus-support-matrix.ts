@@ -10,7 +10,8 @@ export type CorpusSupportStatus =
   | "INFORMATIONAL_ONLY"
   | "UNSUPPORTED"
   | "CLASSIFICATION_BLOCKED"
-  | "PASSWORD_PROTECTED";
+  | "PASSWORD_PROTECTED"
+  | "TECHNICALLY_READY_AWAITING_SAMPLE";
 
 export type PdfCorpusSupportEntry = {
   lot: 1 | 2 | 3 | 4 | 5 | 6;
@@ -22,6 +23,16 @@ export type PdfCorpusSupportEntry = {
   layoutFamily: string;
   quantity: number;
   extractionRequirement: PdfExtractionRequirement;
+  currentStatus: CorpusSupportStatus;
+  reconciliationEligible: boolean;
+};
+
+export type CsvCorpusSupportEntry = {
+  format: "CSV";
+  institutionId: string;
+  institutionName: string;
+  documentType: DocumentKind;
+  layoutFamily: string;
   currentStatus: CorpusSupportStatus;
   reconciliationEligible: boolean;
 };
@@ -93,6 +104,12 @@ export const PDF_CORPUS_SUPPORT_MATRIX: readonly PdfCorpusSupportEntry[] = [
 
   pdf(6, "PLANNER", "Planner", "Documento protegido A", "PASSWORD_PROTECTED", "PLANNER_PROTECTED_A", 1, "PASSWORD_PROTECTED", "PASSWORD_PROTECTED"),
   pdf(6, "PLANNER", "Planner", "Documento protegido B", "PASSWORD_PROTECTED", "PLANNER_PROTECTED_B", 1, "PASSWORD_PROTECTED", "PASSWORD_PROTECTED"),
+];
+
+export const CSV_CORPUS_SUPPORT_MATRIX: readonly CsvCorpusSupportEntry[] = [
+  csv("BRADESCO", "Bradesco", "CURRENT_ACCOUNT", "BRADESCO_CSV_CC", "TECHNICALLY_READY_AWAITING_SAMPLE"),
+  csv("ITAU", "Itaú", "CURRENT_ACCOUNT", "ITAU_CSV_CC", "TECHNICALLY_READY_AWAITING_SAMPLE"),
+  csv("SANTANDER", "Santander", "CURRENT_ACCOUNT", "SANTANDER_CSV_CC", "TECHNICALLY_READY_AWAITING_SAMPLE"),
 ];
 
 export function summarizePdfSupportMatrix(entries: readonly PdfCorpusSupportEntry[]): PdfSupportMatrixSummary {
@@ -168,4 +185,22 @@ function preferredPdfFormat(
     case "PASSWORD_PROTECTED":
       return "BLOCKED_PROTECTED_PDF";
   }
+}
+
+function csv(
+  institutionId: string,
+  institutionName: string,
+  documentType: DocumentKind,
+  layoutFamily: string,
+  currentStatus: CorpusSupportStatus,
+): CsvCorpusSupportEntry {
+  return {
+    format: "CSV",
+    institutionId,
+    institutionName,
+    documentType,
+    layoutFamily,
+    currentStatus,
+    reconciliationEligible: documentType === "CURRENT_ACCOUNT",
+  };
 }

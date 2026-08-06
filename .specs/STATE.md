@@ -46,8 +46,20 @@ versões exatas e bloqueia detecção ambígua por limiar/margem.
 Concluído em `T12`: gates comuns de suporte, tipo, identidade, período, estrutura, sinais,
 duplicidades, saldo, mapping e crosscheck; façade sanitizada converte o modelo legado do parser.
 
-Em andamento: `T13` — seleção de fonte autoritativa única e crosscheck PDF/CSV.
+Concluído em `T13`: seleção de fonte autoritativa única e crosscheck PDF/CSV.
+Concluído em `T14`: independência do formato com testes unitários.
 
+Concluída a **Fase 2 (Lote 1 PDF)** (`T20` a `T26`): 
+- Adapters para Bradesco, BRB, Itaú, Santander e Sofisa.
+- Refatoração do `files.ts` mantendo API compatível.
+- Gate RC garantindo qualidade na detecção e conversão.
+
+Concluída a **Fase 3 (Plataforma CSV Genérica)** (`T30` a `T33`):
+- `csv-reader.ts` e `csv-schema.ts` implementados.
+- Testes robustos de detecção de encoding (BOM), delimitadores, injection e normalizadores de datas e valores.
+- Matriz de suporte com estado `TECHNICALLY_READY_AWAITING_SAMPLE` para CSV.
+
+Em andamento: Handoff para a próxima fase.
 ## Handoff
 
 Ao retomar:

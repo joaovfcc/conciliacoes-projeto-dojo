@@ -49,7 +49,7 @@ export function ReconciliationApp() {
         .then((response) => readResponse<{ session: PublicSession }>(response))
         .then(({ session: active }) => {
           setCredential(saved); setSession(active); setPreflight(active.preflight ?? null); setResult(active.result ?? null);
-          setStage(active.result ? "RESULTS" : active.pendingAction === "PREFLIGHT" || active.status === "PREFLIGHT" ? "PREFLIGHT" : active.status === "QUEUED" || active.status === "RECONCILING" ? "PROCESSING" : active.preflight ? "CONFIRM" : "FILES");
+          setStage(active.result ? "RESULTS" : active.pendingAction === "PREFLIGHT" || active.status === "PREFLIGHT" ? "PREFLIGHT" : active.status === "QUEUED" || active.status === "RECONCILING" ? "PROCESSING" : active.preflight ? "CONFIRM" : "WELCOME");
         })
         .catch(() => sessionStorage.removeItem("reconciliationSession"));
     } catch { sessionStorage.removeItem("reconciliationSession"); }
@@ -108,22 +108,24 @@ export function ReconciliationApp() {
   async function begin(): Promise<void> {
     setError(""); setBusy(true);
     try {
-      const response = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" } });
-      const body = await readResponse<{ session: PublicSession; token: string }>(response);
-      const next = { id: body.session.id, token: body.token };
-      sessionStorage.setItem("reconciliationSession", JSON.stringify(next));
-      setCredential(next); setSession(body.session); setStage("FILES");
+      setStage("FILES");
     } catch (exception) { setError(messageOf(exception)); }
     finally { setBusy(false); }
   }
 
   async function uploadAndAnalyze(): Promise<void> {
-    if (!credential || !ledgerFile || statementFiles.length < 1 || !valueTolerance) return;
+    if (!ledgerFile || statementFiles.length < 1 || !valueTolerance) return;
     setBusy(true); setError(""); setStage("PREFLIGHT");
     try {
-      await uploadFile(credential, ledgerFile, "LEDGER");
-      for (const file of statementFiles) await uploadFile(credential, file, "STATEMENT");
-      const response = await fetch(`/api/sessions/${credential.id}/preflight`, { method: "POST", headers: authHeaders(credential) });
+      const initResponse = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" } });
+      const initBody = await readResponse<{ session: PublicSession; token: string }>(initResponse);
+      const activeCredential = { id: initBody.session.id, token: initBody.token };
+      sessionStorage.setItem("reconciliationSession", JSON.stringify(activeCredential));
+      setCredential(activeCredential);
+
+      await uploadFile(activeCredential, ledgerFile, "LEDGER");
+      for (const file of statementFiles) await uploadFile(activeCredential, file, "STATEMENT");
+      const response = await fetch(`/api/sessions/${activeCredential.id}/preflight`, { method: "POST", headers: authHeaders(activeCredential) });
       const body = await readResponse<{ session: PublicSession }>(response);
       setSession(body.session);
       const detected = body.session.preflight;
@@ -202,7 +204,21 @@ function FileStep(props: { ledgerFile: File | null; setLedgerFile: (file: File |
 }
 
 function UploadBox({ title, hint, accept, multiple, files, onFiles }: { title: string; hint: string; accept: string; multiple: boolean; files: File[]; onFiles: (files: File[]) => void }) {
-  return <div className="dropzone"><h3>{title}</h3><p>{hint}</p><input className="file-input" aria-label={title} type="file" accept={accept} multiple={multiple} onChange={(event) => onFiles(Array.from(event.target.files ?? []))} />{files.length > 0 && <div className="file-list">{files.map((file) => <div className="file-item" key={`${file.name}-${file.size}`}><span>{file.name}</span><span>{formatSize(file.size)}</span></div>)}</div>}</div>;
+  const handleRemove = (index: number) => {
+    const next = [...files];
+    next.splice(index, 1);
+    onFiles(next);
+  };
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const newFiles = Array.from(event.target.files ?? []);
+    if (multiple) {
+      onFiles([...files, ...newFiles]);
+    } else {
+      onFiles(newFiles);
+    }
+    event.target.value = "";
+  };
+  return <div className="dropzone"><h3>{title}</h3><p>{hint}</p><input className="file-input" aria-label={title} type="file" accept={accept} multiple={multiple} onChange={handleChange} />{files.length > 0 && <div className="file-list">{files.map((file, i) => <div className="file-item" key={`${file.name}-${file.size}-${i}`}><span>{file.name}</span><span>{formatSize(file.size)}</span><button type="button" className="button danger" style={{ padding: "4px 8px", fontSize: "12px", marginLeft: "8px" }} onClick={() => handleRemove(i)}>Remover</button></div>)}</div>}</div>;
 }
 
 function Progress({ title, message, progress }: { title: string; message: string; progress: number }) { return <section className="card progress-wrap"><span className="eyebrow">Processamento temporário</span><h2>{title}</h2><p>{message}</p><div className="progress" aria-label={`${progress}%`}><span style={{ width: `${progress}%` }} /></div><small>{progress}%</small></section>; }

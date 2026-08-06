@@ -54,6 +54,15 @@ export type CanonicalBankTransaction = {
   provenance: SourceProvenance;
 };
 
+export type CanonicalInvestmentEntry = {
+  investmentId: string;
+  postingDate?: string;
+  amount: string;
+  kind: "APPLICATION" | "REDEMPTION" | "EARNING" | "POSITION";
+  description: string;
+  provenance: SourceProvenance;
+};
+
 export type CanonicalStatementDocument = {
   sourceId: string;
   format: StatementSourceFormat;
@@ -65,6 +74,7 @@ export type CanonicalStatementDocument = {
   identity: BankIdentity;
   period?: { start: string; end: string };
   transactions: readonly CanonicalBankTransaction[];
+  investments?: readonly CanonicalInvestmentEntry[];
   declaresNoMovements?: boolean;
   openingBalance?: string;
   closingBalance?: string;

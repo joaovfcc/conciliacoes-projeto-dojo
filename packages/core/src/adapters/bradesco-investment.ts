@@ -1,0 +1,136 @@
+/**
+ * Bradesco Investimentos — PDF Adapter V2
+ * Family: BRADESCO_NET_EMPRESA_INVEST
+ */
+
+import { parseMoney, money, parseDate } from "../normalization.js"
+import type { StatementSourceAdapter, ExtractedStatementSource, CanonicalStatementDocument, StatementSourceDetection, StatementSourceValidation, CanonicalInvestmentEntry } from "../statement-sources.js"
+import { createSourceProvenance } from "../statement-sources.js"
+
+const POSITIVE_SIGNATURES = ["EXTRATO DE INVESTIMENTOS", "AGENCIA/CONTA"]
+const NEGATIVE_SIGNATURES: string[] = []
+const BANK_CODE = "237"
+
+export const bradescoInvestmentAdapter: StatementSourceAdapter<"PDF"> = {
+  adapterId: "BRADESCO_NET_EMPRESA_INVEST",
+  adapterVersion: "2",
+  format: "PDF",
+  institutionCode: BANK_CODE,
+  documentType: "INVESTMENT_ACTIVITY",
+  layoutFamily: "BRADESCO_NET_EMPRESA_INVEST",
+
+  detect(source: ExtractedStatementSource & { format: "PDF" }): StatementSourceDetection {
+    const allText = (source.pages ?? []).map((p) => p.text).join("\n")
+    const upper = normalizeAscii(allText).toUpperCase()
+    const positiveMatches = POSITIVE_SIGNATURES.filter((sig) => upper.includes(sig))
+    const negativeMatches = NEGATIVE_SIGNATURES.filter((sig) => upper.includes(sig))
+    const matched = positiveMatches.length === POSITIVE_SIGNATURES.length && negativeMatches.length === 0
+    return {
+      matched,
+      score: matched ? 100 : positiveMatches.length * 20,
+      evidenceCodes: positiveMatches.map((sig) => `SIGNATURE:${sig}`),
+    }
+  },
+
+  parse(source: ExtractedStatementSource & { format: "PDF" }): CanonicalStatementDocument {
+    const pages = source.pages ?? []
+    const allText = pages.map((p) => p.text).join("\n")
+
+    // Extract identity
+    const identityMatch = /([0-9]+)\s*\|\s*([0-9\s-]+)\s*AGENCIA\/CONTA/i.exec(normalizeAscii(allText))
+    const agency = identityMatch?.[1]?.replace(/\D/g, "") ?? ""
+    const account = identityMatch?.[2]?.replace(/\D/g, "") ?? ""
+
+    const investments: CanonicalInvestmentEntry[] = []
+    let txIndex = 0
+
+    for (const page of pages) {
+      const lines = splitLines(page.text)
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index]!
+        const classify = /\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}/.test(line) 
+          ? (/\s-\s/.test(line) ? "APPLICATION" : "REDEMPTION") 
+          : undefined
+
+        const date = /^(\d{2}\/\d{2}\/\d{4})/.exec(line)?.[1]
+        const values = line.match(/-?[\d.]+,\d{2}/g) ?? []
+
+        if (!classify || !date || !values.length) continue
+
+        txIndex++
+        investments.push({
+          investmentId: `inv-${txIndex}`,
+          postingDate: parseDate(date),
+          amount: money(parseMoney(values[0]!)),
+          kind: classify,
+          description: classify === "APPLICATION" ? "Aplicação" : "Resgate/Vencimento",
+          provenance: createSourceProvenance({
+            sourceId: source.sourceId,
+            format: "PDF",
+            adapterId: "BRADESCO_NET_EMPRESA_INVEST",
+            adapterVersion: "2",
+            rawHash: source.sha256,
+            extractionMethod: page.method === "OCR" ? "OCR" : "TEXT",
+            page: page.page,
+          }),
+        })
+      }
+    }
+
+    const txDates = investments.map((tx) => tx.postingDate!)
+    const startDate = txDates.length ? txDates.sort()[0]! : undefined
+    const endDate = txDates.length ? txDates.sort().at(-1)! : undefined
+
+    return {
+      sourceId: source.sourceId,
+      format: "PDF",
+      institutionCode: BANK_CODE,
+      documentType: "INVESTMENT_ACTIVITY",
+      layoutFamily: "BRADESCO_NET_EMPRESA_INVEST",
+      adapterId: "BRADESCO_NET_EMPRESA_INVEST",
+      adapterVersion: "2",
+      identity: {
+        bankCode: BANK_CODE,
+        bankName: "BRADESCO",
+        ...(agency ? { agency: { raw: agency, normalized: agency } } : {}),
+        ...(account ? { account: { raw: account, normalized: account } } : {}),
+      },
+      ...(startDate && endDate ? { period: { start: startDate, end: endDate } } : {}),
+      transactions: [],
+      investments,
+      issues: [
+        {
+          severity: "WARNING",
+          code: "MOVIMENTOS_INVESTIMENTO_INFORMATIVOS",
+          message: "Os movimentos de investimento são informativos e não serão conciliados com o razão.",
+        }
+      ],
+    }
+  },
+
+  validate(document: CanonicalStatementDocument): StatementSourceValidation {
+    const issues = [...document.issues]
+
+    if (!document.identity.bankName) {
+      issues.push({ severity: "ERROR", code: "BANK_IDENTITY_MISSING", message: "Identidade bancária não detectada." })
+    }
+
+    return { accepted: issues.every((i) => i.severity !== "ERROR"), issues }
+  },
+}
+
+function normalizeAscii(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+}
+
+function splitLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .trim()
+        .replace(/(?<=\d)\s+([.,])\s*(?=\d)/g, "$1")
+        .replace(/(?<=\d[.,])\s+(?=\d)/g, ""),
+    )
+    .filter(Boolean)
+}

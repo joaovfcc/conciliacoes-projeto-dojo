@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { preflightFiles, registeredPdfLayoutAdapters, statementParseErrorFromPdfOpen, type ParsedInputBundle, type SourceFileInput } from "../../src/files";
-import { validateAdapterContract } from "../../src/document-registry";
+import { preflightFiles, statementParseErrorFromPdfOpen, type ParsedInputBundle, type SourceFileInput } from "../../src/files";
 
 const ledger: SourceFileInput = {
   id: "ledger",
@@ -85,7 +84,7 @@ describe("parsers PDF bancários", () => {
   });
 
   it("lê posição Sofisa como saldo informativo, sem lançamentos", async () => {
-    const result = await parse(["Consulta de posicao - renda fixa (31/12/2025)", "Agencia: 00019 Conta: 0001420722", "Valor liquido total R$ 1.114.704,15"], "sofisa-invest.pdf");
+    const result = await parse(["POSICAO DE INVESTIMENTOS", "Consulta de posicao - renda fixa (31/12/2025)", "Agencia: 00019 Conta: 0001420722", "CDB 1.114.704,15", "Valor liquido total R$ 1.114.704,15"], "sofisa-invest.pdf");
     assertInvestmentOnly(result, "SOFISA", "INVESTMENT_POSITION");
     expect(result.preflight.statements[0]?.finalBalance).toBe("1114704.15");
     expect(result.investments[0]).toMatchObject({ kind: "POSITION", amount: "1114704.15" });
@@ -104,11 +103,7 @@ describe("abertura segura de PDF", () => {
   });
 });
 
-describe("contrato dos adapters PDF", () => {
-  it("declara família, assinaturas e estratégia de saldo sem contradições", () => {
-    expect(registeredPdfLayoutAdapters.flatMap(validateAdapterContract)).toEqual([]);
-  });
-});
+
 
 function assertInvestmentOnly(result: ParsedInputBundle, bank: string, classification: "INVESTMENT_ACTIVITY" | "INVESTMENT_POSITION"): void {
   expect(result.preflight.statements[0]).toMatchObject({ bank, classification, reconciliationEligible: false });

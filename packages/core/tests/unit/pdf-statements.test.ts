@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { preflightFiles, statementParseErrorFromPdfOpen, type ParsedInputBundle, type SourceFileInput } from "../../src/files";
+import { preflightFiles, statementParseErrorFromPdfOpen, type ParsedInputBundle, type SourceFileInput } from "../../src/index";
 
 const ledger: SourceFileInput = {
   id: "ledger",

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadRuntimeConfig } from "../../src/config";
 import { LocalObjectStore } from "../../src/object-store";
 import { MemorySessionStore } from "../../src/session-store";
-import { parseTsv, RuntimeServices } from "../../src/services";
+import { parseTsv, RuntimeServices, validateOfficeArchive } from "../../src/services";
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -83,3 +83,12 @@ function fakeZipCentralDirectory(name: string): Buffer {
   filename.copy(buffer, 46);
   return buffer;
 }
+
+describe("estrutura OOXML", () => {
+  it("rejeita planilha corrompida antes dos parsers", () => {
+    const payload = fakeZipCentralDirectory("xl/worksheets/sheet1.xml");
+    expect(() => validateOfficeArchive({ originalName: "extrato.xlsx" }, payload)).toThrowError(
+      expect.objectContaining({ code: "ARQUIVO_OOXML_INVALIDO" }),
+    );
+  });
+});

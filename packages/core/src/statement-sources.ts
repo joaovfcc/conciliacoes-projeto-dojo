@@ -1,6 +1,6 @@
 import type { BankIdentity, DocumentKind, ImportIssue } from "./types.js";
 
-export type StatementSourceFormat = "PDF" | "CSV";
+export type StatementSourceFormat = "OFX" | "CSV" | "XLSX" | "XLS" | "XLSM" | "PDF";
 
 export type SourceProcessingMode =
   | "PDF_PRIMARY"
@@ -8,7 +8,7 @@ export type SourceProcessingMode =
   | "PDF_PRIMARY_CSV_CROSSCHECK"
   | "CSV_PRIMARY_PDF_EVIDENCE";
 
-export type SourceExtractionMethod = "TEXT" | "OCR" | "MIXED" | "CSV";
+export type SourceExtractionMethod = "TEXT" | "OCR" | "MIXED" | "CSV" | "TABULAR" | "OFX";
 
 export type ExtractedPdfPage = {
   page: number;
@@ -181,7 +181,11 @@ export function createSourceProvenance(input: SourceProvenance): SourceProvenanc
   }
   const compatible = input.format === "CSV"
     ? input.extractionMethod === "CSV"
-    : input.extractionMethod === "TEXT" || input.extractionMethod === "OCR" || input.extractionMethod === "MIXED";
+    : input.format === "OFX"
+      ? input.extractionMethod === "OFX"
+      : ["XLSX", "XLS", "XLSM"].includes(input.format)
+        ? input.extractionMethod === "TABULAR"
+        : input.extractionMethod === "TEXT" || input.extractionMethod === "OCR" || input.extractionMethod === "MIXED";
   if (!compatible) throw new Error(`Extraction method ${input.extractionMethod} is incompatible with ${input.format}.`);
   return { ...input, rawHash: input.rawHash.toLowerCase() };
 }

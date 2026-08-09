@@ -60,4 +60,8 @@ export interface NormalizedBankTransaction {
 export interface ParsedStatement {
   transactions: NormalizedBankTransaction[];
   warnings: TabularWarning[];
+  metadata?: {
+    agency?: string;
+    account?: string;
+  };
 }

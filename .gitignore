@@ -50,5 +50,7 @@ node_modules/
 coverage/
 *.tsbuildinfo
 .pnpm-store/
+.stryker-tmp/
+/packages/core/reports/
 .local-storage/
 .sessions/

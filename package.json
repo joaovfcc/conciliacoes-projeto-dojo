@@ -4,6 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
+    "postinstall": "pnpm --filter @conciliacao/core prisma:generate",
     "dev": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && pnpm --filter @conciliacao/web dev",
     "build:web": "pnpm --filter @conciliacao/web build",
     "build:worker": "pnpm --filter @conciliacao/worker build",
@@ -17,6 +18,7 @@
     "test:parity": "vitest run tests/parity",
     "test:parity:release": "cross-env PARITY_REQUIRED=1 pnpm test:parity",
     "test:coverage": "pnpm --filter @conciliacao/core exec vitest run --coverage.enabled true && pnpm --filter @conciliacao/runtime exec vitest run --coverage.enabled true && pnpm --filter @conciliacao/worker exec vitest run --coverage.enabled true && pnpm --filter @conciliacao/web exec vitest run --coverage.enabled true",
+    "test:mutation": "pnpm --filter @conciliacao/core test:mutation",
     "inventory:private-corpus": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/core inventory:private-corpus",
     "test:private-statements": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && node scripts/test-private-statements.mjs",
     "test:legacy": "node legacy/python/scripts/run-tests.mjs",

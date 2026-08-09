@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
-import { preflightFiles, type SourceFileInput } from "../../src/files";
+import { preflightFiles, type SourceFileInput } from "../../src/index";
 
 async function ledgerFile(): Promise<SourceFileInput> {
   const workbook = new ExcelJS.Workbook();

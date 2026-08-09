@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "promote_threshold": 2,
+  "window_days": 45,
+  "quarantine_threshold": 2,
+  "next_id": 3,
+  "lessons": [
+    {
+      "id": "L-001",
+      "key": "surviving_mutant::use mutation survivors in financial rules to add boundary and state sequence assertions before raising the mutation ratchet",
+      "text": "Use mutation survivors in financial rules to add boundary and state-sequence assertions before raising the mutation ratchet.",
+      "signal": "surviving_mutant",
+      "scope": "financial-core",
+      "status": "candidate",
+      "features": [
+        "bank-reconciliation-restructuring"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/bank-reconciliation-restructuring/validation.md:86 (financial-core)"
+      ],
+      "created": "2026-08-09T16:52:30Z",
+      "last_seen": "2026-08-09T16:52:30Z"
+    },
+    {
+      "id": "L-002",
+      "key": "ac_gap::keep the private corpus release gate fail closed whenever no approved accounting oracle is configured",
+      "text": "Keep the private-corpus release gate fail-closed whenever no approved accounting oracle is configured.",
+      "signal": "ac_gap",
+      "scope": "parity-release",
+      "status": "candidate",
+      "features": [
+        "bank-reconciliation-restructuring"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/bank-reconciliation-restructuring/validation.md:103 (parity-release)"
+      ],
+      "created": "2026-08-09T16:52:30Z",
+      "last_seen": "2026-08-09T16:52:30Z"
+    }
+  ]
+}

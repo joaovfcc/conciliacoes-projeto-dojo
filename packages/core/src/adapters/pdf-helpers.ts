@@ -18,7 +18,7 @@ import type {
   StatementClassification,
   StatementRecord,
 } from "../types.js"
-import type { SourceFileInput, OcrPage } from "../files.js"
+import type { SourceFileInput, OcrPage } from "../index.js"
 
 export type PdfPage = { page: number; text: string; confidence: string; method: ExtractionMethod }
 export type PdfDetails = { bank: string; agency: string; account: string; periods: string[]; finalBalance?: string }

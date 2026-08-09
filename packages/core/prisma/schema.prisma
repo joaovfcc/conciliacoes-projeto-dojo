@@ -1,0 +1,538 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ActiveStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  INVESTMENT
+  OTHER
+}
+
+enum ImportStatus {
+  RECEIVED
+  READING
+  LAYOUT_DETECTED
+  PARSING
+  NEEDS_MAPPING
+  PARSED_WITH_WARNINGS
+  VALIDATED
+  REJECTED
+}
+
+enum LayoutStatus {
+  DRAFT
+  ACTIVE
+  DEPRECATED
+}
+
+enum ReconciliationStatus {
+  PREPARING
+  READY_FOR_REVIEW
+  UNDER_REVIEW
+  REJECTED
+  APPROVED
+  CLOSED
+}
+
+enum ExceptionStatus {
+  OPEN
+  ASSIGNED
+  UNDER_REVIEW
+  RESOLVED
+  ACCEPTED_TIMING_DIFFERENCE
+  REJECTED
+}
+
+model Company {
+  id              String       @id @default(uuid())
+  name            String
+  documentNumber  String?
+  status          ActiveStatus @default(ACTIVE)
+  timezone        String       @default("America/Sao_Paulo")
+  defaultCurrency String       @default("BRL")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  bankAccounts           BankAccount[]
+  ledgerAccounts         LedgerAccount[]
+  reconciliationProfiles ReconciliationProfile[]
+  dataSources            DataSource[]
+  importBatches          ImportBatch[]
+  reconciliationPeriods ReconciliationPeriod[]
+  reconciliationRuns    ReconciliationRun[]
+  companyAccesses        CompanyAccess[]
+  transactions           NormalizedTransaction[]
+  ledgerEntries          NormalizedLedgerEntry[]
+
+  @@index([documentNumber])
+}
+
+model CompanyAccess {
+  id        String   @id @default(uuid())
+  companyId String
+  actorId   String
+  roles     String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, actorId])
+  @@index([actorId])
+}
+
+model BankAccount {
+  id            String       @id @default(uuid())
+  companyId     String
+  bankCode      String?
+  bankName      String?
+  agency        String?
+  accountNumber String?
+  accountDigit  String?
+  accountType   AccountType
+  currency      String       @default("BRL")
+  status        ActiveStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  company                Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  reconciliationProfiles ReconciliationProfile[]
+  layoutBindings          AccountLayoutBinding[]
+  importBatches           ImportBatch[]
+  transactions            NormalizedTransaction[]
+
+  @@index([companyId, status])
+  @@index([bankCode, agency, accountNumber])
+}
+
+model LedgerAccount {
+  id           String       @id @default(uuid())
+  companyId    String
+  code         String
+  description  String
+  sourceSystem String
+  status       ActiveStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  company      Company                              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  profileLinks ReconciliationProfileLedgerAccount[]
+  entries      NormalizedLedgerEntry[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status])
+}
+
+model ReconciliationProfile {
+  id                   String       @id @default(uuid())
+  companyId            String
+  bankAccountId        String
+  matchTypeId          String
+  frequency            String
+  riskLevel            String
+  amountTolerance      Decimal      @db.Decimal(20, 2)
+  dateToleranceDays    Int
+  preparerId           String?
+  reviewerIds          String[]
+  materialityThreshold Decimal?     @db.Decimal(20, 2)
+  status               ActiveStatus @default(ACTIVE)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  company        Company                              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  bankAccount    BankAccount                          @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  matchType      MatchType                            @relation(fields: [matchTypeId], references: [id], onDelete: Restrict)
+  ledgerAccounts ReconciliationProfileLedgerAccount[]
+  policies       ReconciliationPolicy[]
+  runs           ReconciliationRun[]
+
+  @@index([companyId, status])
+  @@index([bankAccountId])
+}
+
+model ReconciliationProfileLedgerAccount {
+  reconciliationProfileId String
+  ledgerAccountId         String
+
+  profile      ReconciliationProfile @relation(fields: [reconciliationProfileId], references: [id], onDelete: Cascade)
+  ledgerAccount LedgerAccount         @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+
+  @@id([reconciliationProfileId, ledgerAccountId])
+}
+
+model ReconciliationPolicy {
+  id                             String   @id @default(uuid())
+  reconciliationProfileId        String
+  matchingStrategy               String
+  dateToleranceDays              Int
+  amountTolerance                Decimal  @db.Decimal(20, 2)
+  allowOneToMany                 Boolean  @default(false)
+  allowManyToOne                 Boolean  @default(false)
+  allowManyToMany                Boolean  @default(false)
+  descriptionSimilarityThreshold Float?
+  materialityThreshold           Decimal? @db.Decimal(20, 2)
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @updatedAt
+
+  profile ReconciliationProfile @relation(fields: [reconciliationProfileId], references: [id], onDelete: Cascade)
+}
+
+model DataSource {
+  id            String       @id @default(uuid())
+  companyId     String?
+  name          String
+  type          String
+  connectorType String
+  status        ActiveStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  company       Company?      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  importBatches ImportBatch[]
+
+  @@index([companyId, status])
+}
+
+model StatementLayout {
+  id          String   @id @default(uuid())
+  name        String
+  bankCode    String?
+  productType String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  versions LayoutVersion[]
+}
+
+model LayoutVersion {
+  id               String       @id @default(uuid())
+  layoutId         String
+  version          Int
+  status           LayoutStatus @default(DRAFT)
+  formats          String[]
+  detectionRules   Json
+  columnMapping    Json
+  parsingRules     Json
+  fingerprint      Json
+  fingerprintHash  String
+  approvedBy       String?
+  approvedAt       DateTime?
+  createdAt        DateTime     @default(now())
+
+  layout        StatementLayout       @relation(fields: [layoutId], references: [id], onDelete: Restrict)
+  bindings      AccountLayoutBinding[]
+  importBatches ImportBatch[]
+
+  @@unique([layoutId, version])
+  @@index([fingerprintHash, status])
+}
+
+model AccountLayoutBinding {
+  id              String       @id @default(uuid())
+  bankAccountId   String
+  layoutVersionId String
+  priority        Int          @default(100)
+  status          ActiveStatus @default(ACTIVE)
+  customOverrides Json?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  bankAccount   BankAccount   @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  layoutVersion LayoutVersion @relation(fields: [layoutVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([bankAccountId, layoutVersionId])
+  @@index([bankAccountId, status, priority])
+}
+
+model ImportBatch {
+  id                             String       @id @default(uuid())
+  companyId                      String
+  bankAccountId                  String?
+  dataSourceId                   String?
+  layoutVersionId                String?
+  fileHash                       String
+  deduplicationKey               String       @unique
+  status                         ImportStatus @default(RECEIVED)
+  duplicateAuthorizationGranted Boolean      @default(false)
+  warnings                       Json?
+  errors                         Json?
+  createdAt                      DateTime     @default(now())
+  updatedAt                      DateTime     @updatedAt
+  validatedAt                    DateTime?
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  bankAccount   BankAccount?   @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  dataSource    DataSource?    @relation(fields: [dataSourceId], references: [id], onDelete: Restrict)
+  layoutVersion LayoutVersion? @relation(fields: [layoutVersionId], references: [id], onDelete: Restrict)
+  files          ImportedFile[]
+  transactions   NormalizedTransaction[]
+  ledgerEntries  NormalizedLedgerEntry[]
+  evidences      Evidence[]
+
+  @@index([companyId, status, createdAt])
+  @@index([fileHash])
+}
+
+model ImportedFile {
+  id           String   @id @default(uuid())
+  importBatchId String
+  originalName String
+  sanitizedName String
+  extension    String
+  mimeType     String
+  size         Int
+  storageKey   String?
+  createdAt    DateTime @default(now())
+
+  importBatch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  @@index([importBatchId])
+}
+
+model NormalizedTransaction {
+  id                   String   @id
+  companyId            String
+  accountId            String
+  importBatchId        String
+  transactionDate      DateTime @db.Date
+  postingDate          DateTime? @db.Date
+  amount               Decimal  @db.Decimal(20, 2)
+  nature               String
+  description          String
+  documentNumber       String?
+  counterpartyDocument String?
+  balanceAfter         Decimal? @db.Decimal(20, 2)
+  source               Json
+  parsing              Json
+  createdAt            DateTime @default(now())
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  account     BankAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  importBatch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, accountId, transactionDate])
+  @@index([importBatchId])
+}
+
+model NormalizedLedgerEntry {
+  id              String   @id
+  companyId       String
+  ledgerAccountId String
+  importBatchId   String
+  transactionDate DateTime @db.Date
+  amount          Decimal  @db.Decimal(20, 2)
+  nature          String
+  description     String
+  documentNumber  String?
+  batchNumber     String?
+  source          Json
+  createdAt       DateTime @default(now())
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  ledgerAccount LedgerAccount @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  importBatch   ImportBatch    @relation(fields: [importBatchId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, ledgerAccountId, transactionDate])
+  @@index([importBatchId])
+}
+
+model MatchType {
+  id          String @id
+  name        String
+  sourceAType String
+  sourceBType String
+
+  profiles ReconciliationProfile[]
+  rules    MatchRule[]
+}
+
+model MatchRule {
+  id                String  @id
+  matchTypeId       String
+  priority          Int
+  cardinality       String
+  conditions        Json
+  autoConfirm       Boolean @default(false)
+  minimumConfidence Float
+
+  matchType MatchType @relation(fields: [matchTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([matchTypeId, priority])
+}
+
+model ReconciliationPeriod {
+  id        String   @id @default(uuid())
+  companyId String
+  period    String
+  status    String   @default("OPEN")
+  closedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  runs    ReconciliationRun[]
+
+  @@unique([companyId, period])
+}
+
+model ReconciliationRun {
+  id          String               @id @default(uuid())
+  companyId   String
+  profileId   String
+  periodId    String
+  status      ReconciliationStatus @default(PREPARING)
+  preparerId  String
+  reviewerId  String?
+  comments    String?
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  closedAt    DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  profile     ReconciliationProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  period      ReconciliationPeriod  @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  matchGroups MatchGroup[]
+  exceptions  ReconciliationException[]
+  tasks       WorkflowTask[]
+  approvals   Approval[]
+  evidences   Evidence[]
+
+  @@index([companyId, status, createdAt])
+}
+
+model MatchGroup {
+  id                    String   @id
+  reconciliationRunId   String
+  ruleId                String
+  cardinality           String
+  confidence            Float
+  matchedStatementIds   String[]
+  matchedLedgerIds      String[]
+  dateDifferenceDays    Int?
+  amountDifference      Decimal? @db.Decimal(20, 2)
+  descriptionSimilarity Float?
+  status                String
+  actorId               String?
+  createdAt             DateTime @default(now())
+
+  run       ReconciliationRun @relation(fields: [reconciliationRunId], references: [id], onDelete: Cascade)
+  evidences Evidence[]
+
+  @@index([reconciliationRunId])
+}
+
+model ReconciliationException {
+  id                  String          @id
+  reconciliationRunId String
+  type                String
+  status              ExceptionStatus @default(OPEN)
+  assignedTo          String?
+  dueDate             DateTime?
+  resolutionCode      String?
+  explanation         String?
+  statementId         String?
+  ledgerId            String?
+  candidateIds        String[]
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  run       ReconciliationRun @relation(fields: [reconciliationRunId], references: [id], onDelete: Cascade)
+  history   ExceptionHistory[]
+  evidences Evidence[]
+
+  @@index([reconciliationRunId, status])
+  @@index([assignedTo, status])
+}
+
+model ExceptionHistory {
+  id          String   @id @default(uuid())
+  exceptionId String
+  action      String
+  actorId     String
+  before      Json?
+  after       Json?
+  comment     String?
+  occurredAt  DateTime @default(now())
+
+  exception ReconciliationException @relation(fields: [exceptionId], references: [id], onDelete: Cascade)
+
+  @@index([exceptionId, occurredAt])
+}
+
+model WorkflowTask {
+  id                  String   @id @default(uuid())
+  reconciliationRunId String
+  type                String
+  status              String
+  assignedTo          String
+  dueDate              DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  run ReconciliationRun @relation(fields: [reconciliationRunId], references: [id], onDelete: Cascade)
+
+  @@index([assignedTo, status])
+}
+
+model Approval {
+  id                  String   @id @default(uuid())
+  reconciliationRunId String
+  actorId             String
+  decision            String
+  comment             String?
+  occurredAt          DateTime @default(now())
+
+  run ReconciliationRun @relation(fields: [reconciliationRunId], references: [id], onDelete: Cascade)
+
+  @@index([reconciliationRunId, occurredAt])
+}
+
+model Evidence {
+  id                  String   @id @default(uuid())
+  importBatchId       String?
+  reconciliationRunId String?
+  matchGroupId        String?
+  exceptionId         String?
+  type                String
+  source              Json
+  content             Json?
+  createdAt           DateTime @default(now())
+
+  importBatch       ImportBatch?             @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  reconciliationRun ReconciliationRun?       @relation(fields: [reconciliationRunId], references: [id], onDelete: Cascade)
+  matchGroup        MatchGroup?               @relation(fields: [matchGroupId], references: [id], onDelete: Cascade)
+  exception         ReconciliationException?  @relation(fields: [exceptionId], references: [id], onDelete: Cascade)
+
+  @@index([importBatchId])
+  @@index([reconciliationRunId])
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  companyId  String?
+  entityType String
+  entityId   String
+  action     String
+  actorId    String?
+  occurredAt DateTime @default(now())
+  before     Json?
+  after      Json?
+  metadata   Json?
+
+  @@index([entityType, entityId, occurredAt])
+  @@index([companyId, occurredAt])
+}

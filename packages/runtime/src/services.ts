@@ -24,7 +24,7 @@ export class RuntimeServices {
     const file = session.files.find((item) => item.id === fileId); if (!file) throw new PublicRuntimeError("ARQUIVO_NAO_ENCONTRADO", "O arquivo não pertence a esta sessão.", 404);
     try {
     const buffer = await this.objects.get(file.objectKey); if (buffer.length !== file.size) throw new PublicRuntimeError("TAMANHO_DIVERGENTE", "O tamanho recebido difere do upload autorizado.", 400);
-    validateSignature(file, buffer); inspectContainer(file, buffer); await scanBuffer(buffer, file.originalName, this.config);
+    validateSignature(file, buffer); validateOfficeArchive(file, buffer); await scanBuffer(buffer, file.originalName, this.config);
     file.sha256 = createHash("sha256").update(buffer).digest("hex");
     const duplicate = session.files.find((item) => item.id !== file.id && item.sha256 === file.sha256); if (duplicate) throw new PublicRuntimeError("ARQUIVO_DUPLICADO", "O mesmo conteúdo foi enviado mais de uma vez.", 400);
     const ledgerCount = session.files.filter((item) => item.kind === "LEDGER" && item.sha256).length;
@@ -113,7 +113,7 @@ function preflightError(error: unknown): PublicRuntimeError {
 function validateUploadShape(session: ReconciliationSession, input: { kind: "LEDGER" | "STATEMENT"; originalName: string; contentType: string; size: number }, config: RuntimeConfig): void {
   if (input.size <= 0 || input.size > config.maxFileBytes) throw new PublicRuntimeError("LIMITE_ARQUIVO", "O arquivo deve ter até 25 MB.", 413);
   const total = session.files.reduce((sum, item) => sum + item.size, 0) + input.size; if (total > config.maxSessionBytes) throw new PublicRuntimeError("LIMITE_SESSAO", "A sessão deve ter até 75 MB de arquivos.", 413);
-  const extension = input.originalName.split(".").pop()?.toLowerCase(); const accepted = input.kind === "LEDGER" ? ["csv", "xlsx"] : ["csv", "xlsx", "ofx", "pdf"];
+  const extension = input.originalName.split(".").pop()?.toLowerCase(); const accepted = input.kind === "LEDGER" ? ["csv", "xlsx", "xls", "xlsm"] : ["csv", "xlsx", "xls", "xlsm", "ofx", "pdf"];
   if (!extension || !accepted.includes(extension)) throw new PublicRuntimeError("FORMATO_INVALIDO", `Formato não aceito para ${input.kind === "LEDGER" ? "razão" : "extrato"}.`, 400);
   if (session.files.some((item) => item.kind === "LEDGER") && input.kind === "LEDGER") throw new PublicRuntimeError("RAZAO_DUPLICADO", "A sessão aceita exatamente um arquivo de razão.", 400);
   if (session.files.filter((item) => item.kind === "STATEMENT").length >= config.maxStatements && input.kind === "STATEMENT") throw new PublicRuntimeError("LIMITE_EXTRATOS", `A sessão aceita no máximo ${config.maxStatements} extratos.`, 400);
@@ -124,6 +124,44 @@ function validateSignature(file: StoredFile, buffer: Buffer): void {
   if (extension === "pdf" && !buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new PublicRuntimeError("ASSINATURA_INVALIDA", "O conteúdo não possui assinatura real de PDF.");
   if (extension === "xlsx" && !(buffer[0] === 0x50 && buffer[1] === 0x4b)) throw new PublicRuntimeError("ASSINATURA_INVALIDA", "O conteúdo não possui assinatura real de XLSX.");
   if (extension === "ofx" && !buffer.toString("latin1", 0, Math.min(buffer.length, 4096)).toUpperCase().includes("OFX")) throw new PublicRuntimeError("ASSINATURA_INVALIDA", "O conteúdo não parece ser um OFX.");
+}
+
+export function validateOfficeArchive(file: Pick<StoredFile, "originalName">, buffer: Buffer): void {
+  const extension = file.originalName.split(".").pop()?.toLowerCase();
+  if (!["xlsx", "xlsm"].includes(extension ?? "")) return;
+  const centralHeader = Buffer.from([0x50, 0x4b, 0x01, 0x02]);
+  const endOfDirectory = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
+  const entries: Array<{ name: string; compressed: number; uncompressed: number }> = [];
+  let offset = 0;
+  while ((offset = buffer.indexOf(centralHeader, offset)) >= 0) {
+    if (offset + 46 > buffer.length) break;
+    const compressed = buffer.readUInt32LE(offset + 20);
+    const uncompressed = buffer.readUInt32LE(offset + 24);
+    const nameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const end = offset + 46 + nameLength;
+    if (end > buffer.length) break;
+    const name = buffer.toString("utf8", offset + 46, end).replace(/\\/g, "/").toLowerCase();
+    entries.push({ name, compressed, uncompressed });
+    offset = end + extraLength + commentLength;
+    if (entries.length > 10_000) {
+      throw new PublicRuntimeError("ZIP_BOMB_REJEITADO", "A planilha possui entradas demais para ser processada com segurança.");
+    }
+  }
+  if (extension === "xlsx" && entries.some((entry) => entry.name.endsWith("/vbaproject.bin") || entry.name === "vbaproject.bin")) {
+    throw new PublicRuntimeError("MACRO_REJEITADA", "Uma planilha XLSX não pode conter componentes de macro.");
+  }
+  if (buffer.indexOf(endOfDirectory) < 0 || entries.length === 0) {
+    throw new PublicRuntimeError("ARQUIVO_OOXML_INVALIDO", "A estrutura interna da planilha é inválida.");
+  }
+  const totalUncompressed = entries.reduce((total, entry) => total + entry.uncompressed, 0);
+  if (totalUncompressed > 100 * 1024 * 1024 || entries.some((entry) => entry.uncompressed > 0 && entry.uncompressed / Math.max(1, entry.compressed) > 100)) {
+    throw new PublicRuntimeError("ZIP_BOMB_REJEITADO", "A planilha excede os limites de descompactação segura.");
+  }
+  if (entries.some((entry) => entry.name.startsWith("/") || entry.name.split("/").includes(".."))) {
+    throw new PublicRuntimeError("CAMINHO_INTERNO_INVALIDO", "A planilha contém um caminho interno inseguro.");
+  }
 }
 
 function validateConfirmation(input: ConfirmProcessingRequest, session: ReconciliationSession): void {
@@ -156,28 +194,7 @@ function validateConfirmation(input: ConfirmProcessingRequest, session: Reconcil
   if (mappedFileIds.size !== eligibleStatements.length || eligibleStatements.some((item) => !mappedFileIds.has(item.fileId))) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "Confirme o relacionamento de todos os extratos elegíveis antes de conciliar.", 422);
 }
 
-function inspectContainer(file: StoredFile, buffer: Buffer): void {
-  if (!file.originalName.toLowerCase().endsWith(".xlsx")) return;
-  let offset = 0;
-  let entries = 0;
-  let expanded = 0;
-  while (offset + 46 <= buffer.length) {
-    if (buffer.readUInt32LE(offset) !== 0x02014b50) { offset += 1; continue; }
-    entries += 1;
-    const compressed = buffer.readUInt32LE(offset + 20);
-    const uncompressed = buffer.readUInt32LE(offset + 24);
-    const nameLength = buffer.readUInt16LE(offset + 28);
-    const extraLength = buffer.readUInt16LE(offset + 30);
-    const commentLength = buffer.readUInt16LE(offset + 32);
-    const name = buffer.toString("utf8", offset + 46, offset + 46 + nameLength).toLowerCase();
-    expanded += uncompressed;
-    if (name.includes("vbaproject.bin") || name.endsWith(".bin")) throw new PublicRuntimeError("MACRO_REJEITADA", "Planilhas com macros ou componentes binÃ¡rios nÃ£o sÃ£o aceitas.");
-    if (compressed > 0 && uncompressed / compressed > 100) throw new PublicRuntimeError("COMPACTACAO_ANORMAL", "A planilha possui taxa de compactaÃ§Ã£o anormal.");
-    if (entries > 10_000 || expanded > 250 * 1024 * 1024) throw new PublicRuntimeError("PLANILHA_EXPANDIDA_DEMAIS", "A estrutura interna da planilha excede os limites de seguranÃ§a.");
-    offset += 46 + nameLength + extraLength + commentLength;
-  }
-  if (entries === 0) throw new PublicRuntimeError("XLSX_INVALIDO", "A estrutura interna da planilha nÃ£o Ã© vÃ¡lida.");
-}
+
 
 async function scanBuffer(buffer: Buffer, originalName: string, config: RuntimeConfig): Promise<void> {
   if (!config.antivirusRequired) return;

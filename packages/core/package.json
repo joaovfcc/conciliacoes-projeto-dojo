@@ -11,14 +11,18 @@
     }
   },
   "scripts": {
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:unit",
     "test:unit": "vitest run tests/unit",
+    "test:coverage": "vitest run --coverage.enabled true",
+    "test:mutation": "stryker run stryker.config.mjs",
     "inventory:private-corpus": "node scripts/inventory-private-corpus.mjs",
     "lint": "eslint src tests --max-warnings=0"
   },
   "dependencies": {
+    "@prisma/client": "^5.22.0",
     "csv-parse": "^6.1.0",
     "decimal.js": "^10.6.0",
     "exceljs": "^4.4.0",
@@ -30,8 +34,11 @@
   "devDependencies": {
     "@types/node": "^24.10.0",
     "@types/yauzl": "^2.10.3",
+    "@stryker-mutator/core": "9.6.1",
+    "@stryker-mutator/vitest-runner": "9.6.1",
     "eslint": "^9.39.0",
     "fast-check": "4.5.3",
+    "prisma": "^5.22.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.8"
   }

@@ -12,7 +12,7 @@ export const ITAU_CHECKING_XLSX_V1: StatementLayoutProfile = {
     sheetNameAliases: ["lançamentos"],
     requiredHeaderGroups: [
       ["data", "data de lançamento"],
-      ["lançamento", "histórico", "descrição"],
+      ["lançamento", "histórico", "descrição", "razão social"],
       ["valor (r$)", "valor"]
     ],
     negativeSheetNames: ["lançamentos futuros"],
@@ -21,7 +21,7 @@ export const ITAU_CHECKING_XLSX_V1: StatementLayoutProfile = {
 
   columns: {
     date: ["data", "data de lançamento"],
-    description: ["lançamento", "histórico", "descrição"],
+    description: ["lançamento", "histórico", "descrição", "razão social"],
     document: ["documento", "ag/origem", "cpf/cnpj"],
     amount: ["valor (r$)", "valor"],
     balance: ["saldo (r$)", "saldo"],

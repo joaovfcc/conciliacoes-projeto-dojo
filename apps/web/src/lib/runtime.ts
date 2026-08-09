@@ -41,6 +41,7 @@ export function jsonError(error: unknown): Response {
     if (error.status === 429 || error.status === 503) init.headers = { "Retry-After": "300" };
     return Response.json({ error: { code: error.code, message: error.message } }, init);
   }
+  console.error(error);
   console.error(JSON.stringify({ event: "request_failed", code: "INTERNAL_ERROR", timestamp: new Date().toISOString() }));
   return Response.json({ error: { code: "INTERNAL_ERROR", message: "Não foi possível concluir a operação. Tente novamente." } }, { status: 500 });
 }

@@ -1,153 +1,128 @@
-import { ExtractedTabularSheet } from "../tabular/tabular-types.js";
-import { StatementLayoutProfile, ParsedStatement, NormalizedBankTransaction } from "./statement-types.js";
-import { parseDate, parseMoney } from "../normalization.js";
+import { normalizeHeader, parseDate, parseMoney } from "../normalization.js";
+import type { ExtractedTabularRow, ExtractedTabularSheet, TabularSourceFormat, TabularWarning } from "../tabular/tabular-types.js";
+import type { NormalizedBankTransaction, ParsedStatement, StatementLayoutProfile } from "./statement-types.js";
+
+type ColumnName = "date" | "description" | "document" | "amount" | "debit" | "credit" | "balance";
+
+function aliasMatches(header: string, alias: string): boolean {
+  const normalizedHeader = normalizeHeader(header);
+  const normalizedAlias = normalizeHeader(alias);
+  if (normalizedHeader === normalizedAlias) return true;
+  const headerTokens = new Set(normalizedHeader.split("_").filter(Boolean));
+  const aliasTokens = normalizedAlias.split("_").filter(Boolean);
+  return aliasTokens.length > 0 && aliasTokens.every((token) => headerTokens.has(token));
+}
+
+function mapColumns(row: ExtractedTabularRow, profile: StatementLayoutProfile): Map<ColumnName, number> {
+  const mapping = new Map<ColumnName, number>();
+  const definitions: Array<[ColumnName, string[] | undefined]> = [
+    ["date", profile.columns.date], ["description", profile.columns.description], ["document", profile.columns.document],
+    ["amount", profile.columns.amount], ["debit", profile.columns.debit], ["credit", profile.columns.credit], ["balance", profile.columns.balance],
+  ];
+  for (const cell of row.cells) {
+    const roles = definitions.filter(([, aliases]) => aliases?.some((alias) => aliasMatches(cell.displayValue, alias)));
+    if (roles.length === 1) mapping.set(roles[0]![0], cell.columnIndex);
+  }
+  return mapping;
+}
+
+function exactStructuralPattern(row: ExtractedTabularRow, patterns: string[] | undefined): boolean {
+  const values = row.cells.map((cell) => normalizeHeader(cell.displayValue)).filter(Boolean);
+  return patterns?.some((pattern) => values.length === 1 && values[0] === normalizeHeader(pattern)) ?? false;
+}
 
 export function parseStatement(
   sheet: ExtractedTabularSheet,
   profile: StatementLayoutProfile,
   headerRowIndex: number,
-  sourceFormat: any,
-  fileName?: string
+  sourceFormat: TabularSourceFormat,
+  fileName?: string,
 ): ParsedStatement {
   const transactions: NormalizedBankTransaction[] = [];
-  const warnings: any[] = [];
-  
-  if (headerRowIndex < 0 || headerRowIndex >= sheet.rows.length) {
-    return { transactions, warnings: [{ code: "NO_HEADER", message: "Header row not found" }] };
-  }
-  
+  const warnings: TabularWarning[] = [];
   const headerRow = sheet.rows[headerRowIndex];
-  if (!headerRow) {
-    return { transactions, warnings: [{ code: "NO_HEADER", message: "Header row is undefined" }] };
-  }
-  const colMap = new Map<string, number>();
-  
-  // Map columns based on profile definitions
-  for (const cell of headerRow.cells) {
-    const text = cell.displayValue.toLowerCase().trim();
-    if (!text) continue;
-    
-    // Check which profile column this belongs to
-    if (profile.columns.date.some(a => text.includes(a.toLowerCase()))) colMap.set("date", cell.columnIndex);
-    else if (profile.columns.description.some(a => text.includes(a.toLowerCase()))) colMap.set("description", cell.columnIndex);
-    else if (profile.columns.document?.some(a => text.includes(a.toLowerCase()))) colMap.set("document", cell.columnIndex);
-    else if (profile.columns.amount?.some(a => text.includes(a.toLowerCase()))) colMap.set("amount", cell.columnIndex);
-    else if (profile.columns.debit?.some(a => text.includes(a.toLowerCase()))) colMap.set("debit", cell.columnIndex);
-    else if (profile.columns.credit?.some(a => text.includes(a.toLowerCase()))) colMap.set("credit", cell.columnIndex);
-    else if (profile.columns.balance?.some(a => text.includes(a.toLowerCase()))) colMap.set("balance", cell.columnIndex);
+  if (!headerRow) return { transactions, warnings: [{ code: "NO_HEADER", message: "Linha de cabeçalho não encontrada." }] };
+
+  let agency: string | undefined;
+  let account: string | undefined;
+  for (const row of sheet.rows.slice(0, headerRowIndex)) {
+    const text = row.cells.map((cell) => cell.displayValue).join(" ");
+    const agencyMatch = /ag[êe]ncia:?\s*([0-9A-Z-]+)/i.exec(text);
+    const accountMatch = /conta(?: corrente)?:?\s*([0-9A-Z-]+)/i.exec(text);
+    if (agencyMatch?.[1] && !agency) agency = agencyMatch[1];
+    if (accountMatch?.[1] && !account) account = accountMatch[1];
   }
 
+  const columns = mapColumns(headerRow, profile);
+  if (!columns.has("date") || !columns.has("description") || (!columns.has("amount") && !(columns.has("debit") && columns.has("credit")))) {
+    return { transactions, warnings: [{ code: "COLUMN_MAPPING_INCOMPLETE", message: "Colunas obrigatórias não foram mapeadas sem ambiguidade." }] };
+  }
+  const cell = (row: ExtractedTabularRow, name: ColumnName): string | undefined => {
+    const index = columns.get(name);
+    return index === undefined ? undefined : row.cells.find((candidate) => candidate.columnIndex === index)?.displayValue;
+  };
   let lastDate = "";
-  
-  for (let r = headerRowIndex + 1; r < sheet.rows.length; r++) {
-    const row = sheet.rows[r];
-    if (!row) continue;
-    
-    // Check stop patterns
-    const rowText = row.cells.map(c => c.displayValue).join(" ").toLowerCase();
-    if (profile.rules.stopPatterns?.some(p => rowText.includes(p.toLowerCase()))) {
-      break;
-    }
-    
-    // Check ignore patterns
-    if (profile.rules.ignoreRowPatterns?.some(p => rowText.includes(p.toLowerCase()))) {
+
+  for (const row of sheet.rows.slice(headerRowIndex + 1)) {
+    if (exactStructuralPattern(row, profile.rules.stopPatterns)) break;
+    if (exactStructuralPattern(row, profile.rules.ignoreRowPatterns)) continue;
+    if (row.cells.every((candidate) => !candidate.displayValue.trim())) continue;
+
+    let rawDate = cell(row, "date");
+    const description = cell(row, "description")?.trim() ?? "";
+    const rawAmount = cell(row, "amount");
+    const rawDebit = cell(row, "debit");
+    const rawCredit = cell(row, "credit");
+    const rawBalance = cell(row, "balance");
+    if (!rawDate && profile.rules.inheritDateFromPreviousRow && lastDate && description && !rawAmount && !rawDebit && !rawCredit) {
+      const previous = transactions.at(-1);
+      if (previous) previous.description = `${previous.description} ${description}`.trim();
       continue;
     }
-    
-    // Extract values
-    const getCell = (colName: string) => {
-      const colIdx = colMap.get(colName);
-      if (colIdx === undefined) return undefined;
-      return row.cells.find(c => c.columnIndex === colIdx)?.displayValue;
-    };
-    
-    let rawDate = getCell("date");
-    const rawDesc = getCell("description");
-    const rawDoc = getCell("document");
-    const rawAmount = getCell("amount");
-    const rawDebit = getCell("debit");
-    const rawCredit = getCell("credit");
-    const rawBalance = getCell("balance");
-    
-    // Skip empty description rows (common in Excel)
-    if (!rawDesc || rawDesc.trim() === "") continue;
+    if (!rawDate) continue;
 
-    if (!rawDate && profile.rules.inheritDateFromPreviousRow && lastDate) {
-      rawDate = lastDate;
+    let date: string;
+    try { date = parseDate(rawDate); lastDate = rawDate; }
+    catch {
+      warnings.push({ code: "INVALID_TRANSACTION_DATE", message: "Linha ignorada por data inválida.", sheetName: sheet.name, rowNumber: row.rowNumber });
+      continue;
     }
-    
-    if (!rawDate) {
-       continue; // Can't process without date
-    }
-    
-    let dateStr = "";
+    if (!description) continue;
+
+    let amount: number;
+    let direction: "DEBIT" | "CREDIT";
     try {
-      dateStr = parseDate(rawDate);
-      lastDate = rawDate;
+      if (rawAmount?.trim()) {
+        const value = parseMoney(rawAmount);
+        if (value.isZero()) continue;
+        amount = value.abs().toNumber();
+        direction = value.isNegative() ? "DEBIT" : "CREDIT";
+      } else if (rawDebit?.trim()) {
+        amount = parseMoney(rawDebit).abs().toNumber(); direction = "DEBIT";
+      } else if (rawCredit?.trim()) {
+        amount = parseMoney(rawCredit).abs().toNumber(); direction = "CREDIT";
+      } else continue;
     } catch {
-      continue; // Skip invalid dates
-    }
-
-    let amount = 0;
-    let direction: "DEBIT" | "CREDIT" = "CREDIT";
-
-    try {
-      if (colMap.has("amount") && rawAmount) {
-        const val = parseMoney(rawAmount).toNumber();
-        amount = Math.abs(val);
-        if (val < 0 || profile.rules.negativeAmountMeansDebit && val < 0) {
-          direction = "DEBIT";
-        } else if (val > 0) {
-          direction = "CREDIT";
-        } else {
-          continue; // Zero amount
-        }
-      } else if (colMap.has("debit") && rawDebit) {
-        amount = Math.abs(parseMoney(rawDebit).toNumber());
-        direction = "DEBIT";
-      } else if (colMap.has("credit") && rawCredit) {
-        amount = Math.abs(parseMoney(rawCredit).toNumber());
-        direction = "CREDIT";
-      } else {
-        continue;
-      }
-    } catch {
+      warnings.push({ code: "INVALID_TRANSACTION_AMOUNT", message: "Linha ignorada por valor inválido.", sheetName: sheet.name, rowNumber: row.rowNumber });
       continue;
     }
 
     let balance: number | undefined;
-    if (colMap.has("balance") && rawBalance) {
-      try {
-        balance = parseMoney(rawBalance).toNumber();
-      } catch {
-        // ignore
-      }
+    if (rawBalance?.trim()) {
+      try { balance = parseMoney(rawBalance).toNumber(); }
+      catch { warnings.push({ code: "INVALID_BALANCE", message: "Saldo da linha não pôde ser interpretado.", sheetName: sheet.name, rowNumber: row.rowNumber }); }
     }
-    
-    const originalValues: Record<string, string> = {};
-    for (const cell of row.cells) {
-      originalValues[cell.columnIndex.toString()] = cell.displayValue;
-    }
-
+    const originalValues = Object.fromEntries(row.cells.map((candidate) => [String(candidate.columnIndex), candidate.displayValue]));
     transactions.push({
-      date: dateStr,
-      description: rawDesc.trim(),
-      ...(rawDoc ? { document: rawDoc.trim() } : {}),
-      amount,
-      direction,
-      ...(balance !== undefined ? { balance } : {}),
+      date, description,
+      ...(cell(row, "document")?.trim() ? { document: cell(row, "document")!.trim() } : {}),
+      amount, direction, ...(balance !== undefined ? { balance } : {}),
       evidence: {
-        ...(fileName ? { fileName } : {}),
-        sourceFormat,
-        sheetName: sheet.name,
-        sheetIndex: sheet.index,
-        rowNumber: row.rowNumber,
-        profileId: profile.id,
-        originalValues
+        ...(fileName ? { fileName } : {}), sourceFormat, sheetName: sheet.name, sheetIndex: sheet.index,
+        rowNumber: row.rowNumber, profileId: profile.id, originalValues,
       },
-      warnings: []
+      warnings: [],
     });
   }
-
-  return { transactions, warnings };
+  return { transactions, warnings, metadata: { ...(agency ? { agency } : {}), ...(account ? { account } : {}) } };
 }

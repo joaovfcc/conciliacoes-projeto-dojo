@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { preflightFiles, type SourceFileInput } from "../../packages/core/src/files";
+import { preflightFiles, type SourceFileInput } from "../../packages/core/src/index";
 import { validatePrivateStatementOracles, type PrivateStatementOracle } from "../../packages/core/src/private-oracle";
 import { loadRuntimeConfig } from "../../packages/runtime/src/config";
 import { createOcrProvider } from "../../packages/runtime/src/services";

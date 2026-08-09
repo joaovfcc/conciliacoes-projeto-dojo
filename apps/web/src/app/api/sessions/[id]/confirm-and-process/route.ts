@@ -4,7 +4,7 @@ import { z } from "zod";
 import { authorized, jsonError, publicSession, runtime } from "@/lib/runtime";
 
 const confirmationSchema = z.object({
-  company: z.string().trim().min(1).max(120),
+  company: z.string().trim().max(120),
   branch: z.string().trim().max(120).optional(),
   period: z.string().regex(/^\d{6}$/),
   valueTolerance: z.string().regex(/^\d+(?:[.,]\d{1,2})?$/),

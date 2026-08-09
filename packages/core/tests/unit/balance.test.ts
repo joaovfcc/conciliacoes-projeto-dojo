@@ -26,6 +26,14 @@ describe("controle de saldo de extrato", () => {
     ])).toMatchObject({ status: "FAILED", difference: "5.00" });
   });
 
+  it("preserva a primeira divergência intermediária mesmo quando o saldo final volta a fechar", () => {
+    expect(calculateBalanceCheck([
+      { amount: "10.00", runningBalance: "110.00" },
+      { amount: "-5.00", runningBalance: "100.00" },
+      { amount: "2.00", runningBalance: "107.00" },
+    ])).toMatchObject({ status: "FAILED", difference: "5.00", extractedClosingBalance: "107.00" });
+  });
+
   it("não inventa um saldo de abertura quando o layout não fornece saldos acumulados", () => {
     expect(calculateBalanceCheck([{ amount: "10.00" }])).toEqual({
       status: "NOT_AVAILABLE",
@@ -34,5 +42,12 @@ describe("controle de saldo de extrato", () => {
       movementTotal: "10.00",
       tolerance: "0.01",
     });
+  });
+
+  it("considera o controle indisponível quando apenas parte das linhas possui saldo acumulado", () => {
+    expect(calculateBalanceCheck([
+      { amount: "10.00", runningBalance: "110.00" },
+      { amount: "-5.00" },
+    ])).toMatchObject({ status: "NOT_AVAILABLE", movementTotal: "5.00" });
   });
 });

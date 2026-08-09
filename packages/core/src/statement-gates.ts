@@ -45,6 +45,11 @@ export type StatementQualityGateInput = {
   adapterValidation?: StatementSourceValidation;
   mappingStatus: "CONFIRMED" | "PENDING" | "NOT_REQUIRED";
   crosscheckStatus: "PASSED" | "FAILED" | "NOT_PROVIDED";
+  expectedIdentity?: {
+    bankCode?: string;
+    agency?: string;
+    account?: string;
+  };
 };
 
 export function runStatementQualityGates(input: StatementQualityGateInput): StatementQualityResult {
@@ -69,7 +74,7 @@ export function runStatementQualityGates(input: StatementQualityGateInput): Stat
 
   const eligibleType = isReconciliationEligibleDocumentType(document.documentType);
   gates.push(gate("DOCUMENT_TYPE_ELIGIBLE", eligibleType ? "PASSED" : "NOT_APPLICABLE", eligibleType ? [] : ["DOCUMENT_INFORMATIONAL_ONLY"]));
-  gates.push(identityGate(document));
+  gates.push(identityGate(document, input.expectedIdentity));
   gates.push(periodGate(document));
   gates.push(structuralGate(document, input.adapterValidation));
   gates.push(signGate(document.transactions));
@@ -139,13 +144,33 @@ export function canonicalFromParsedFinancialDocument(
   };
 }
 
-function identityGate(document: CanonicalStatementDocument): StatementGateResult {
+function identityGate(
+  document: CanonicalStatementDocument,
+  expected: StatementQualityGateInput["expectedIdentity"],
+): StatementGateResult {
   if (!document.identity.bankName.trim()) return gate("IDENTITY", "FAILED", ["BANK_IDENTITY_MISSING"]);
   if (isReconciliationEligibleDocumentType(document.documentType)
     && (!document.identity.agency?.normalized || !document.identity.account?.normalized)) {
     return gate("IDENTITY", "REVIEW_REQUIRED", ["BANK_ACCOUNT_CONFIRMATION_REQUIRED"]);
   }
+  if (expected) {
+    const mismatches = [
+      identityMismatch(expected.account, document.identity.account?.normalized),
+      identityMismatch(expected.agency, document.identity.agency?.normalized),
+      identityMismatch(expected.bankCode, document.institutionCode),
+    ];
+    if (mismatches.some(Boolean)) return gate("IDENTITY", "FAILED", ["BANK_ACCOUNT_IDENTITY_MISMATCH"]);
+  }
   return gate("IDENTITY", "PASSED");
+}
+
+function identityMismatch(expected: string | undefined, actual: string | undefined): boolean {
+  if (!expected || !actual || actual === "UNCONFIRMED") return false;
+  const normalize = (value: string) => {
+    const compact = value.normalize("NFKD").replace(/\p{Diacritic}/gu, "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+    return /^\d+$/.test(compact) ? compact.replace(/^0+(?=\d)/, "") : compact;
+  };
+  return normalize(expected) !== normalize(actual);
 }
 
 function periodGate(document: CanonicalStatementDocument): StatementGateResult {
@@ -195,7 +220,12 @@ function signGate(transactions: readonly CanonicalBankTransaction[]): StatementG
 function duplicateGate(transactions: readonly CanonicalBankTransaction[]): StatementGateResult {
   const ids = transactions.map((transaction) => transaction.transactionId);
   if (new Set(ids).size !== ids.length) return gate("DUPLICATES", "FAILED", ["TRANSACTION_ID_DUPLICATE"]);
-  const signatures = transactions.map(transactionSignature);
+  let signatures: string[];
+  try {
+    signatures = transactions.map(transactionSignature);
+  } catch {
+    return gate("DUPLICATES", "FAILED", ["TRANSACTION_AMOUNT_INVALID"]);
+  }
   if (new Set(signatures).size !== signatures.length) {
     return gate("DUPLICATES", "REVIEW_REQUIRED", ["POSSIBLE_DUPLICATE_SOURCE_TRANSACTION"]);
   }
@@ -246,6 +276,8 @@ function transactionSignature(transaction: CanonicalBankTransaction): string {
 
 function canonicalExtractionMethod(format: StatementSourceFormat, current: string): SourceExtractionMethod {
   if (format === "CSV") return "CSV";
+  if (format === "OFX") return "OFX";
+  if (["XLSX", "XLS", "XLSM"].includes(format)) return "TABULAR";
   if (current === "OCR" || current === "MIXED") return current;
   return "TEXT";
 }

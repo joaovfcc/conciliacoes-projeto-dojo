@@ -1,6 +1,6 @@
 # Estado de execução do PRD V2
 
-Atualizado em: 2026-08-04
+Atualizado em: 2026-08-09
 
 ## Decisões vigentes
 
@@ -12,6 +12,10 @@ Atualizado em: 2026-08-04
 - `AD-006` — Sugestões 1:N e N:1 ficam desativadas por padrão e não compõem totais conciliados automaticamente.
 - `AD-007` — Redis, BullMQ, MinIO e infraestrutura de produção só avançam depois da homologação funcional do core, salvo dependência técnica comprovada em ADR.
 - `AD-008` — `v0.2.0-rc.1` representa apenas o Lote 1 PDF. A conclusão do PRD V2 exige o gate global do corpus ou bloqueio externo formal.
+- `AD-009` — A reestruturação usa decimal string no domínio e `Decimal` no PostgreSQL; conversões para `number` não podem cruzar o boundary financeiro.
+- `AD-010` — A API V2 aplica autorização por empresa e papel por meio de um contexto de ator desacoplado do provedor corporativo de identidade.
+- `AD-011` — A API de sessão anônima existente permanece como compatibilidade durante a migração; o novo domínio persistente não depende dela.
+- `AD-012` — O gate inicial de mutation testing usa `high=80`, `low=65` e `break=55`, sem excluir regras financeiras; a meta deve subir progressivamente conforme os mutantes sobreviventes forem classificados.
 
 ## Baseline protegido
 
@@ -60,6 +64,17 @@ Concluída a **Fase 3 (Plataforma CSV Genérica)** (`T30` a `T33`):
 - Matriz de suporte com estado `TECHNICALLY_READY_AWAITING_SAMPLE` para CSV.
 
 Em andamento: Handoff para a próxima fase.
+
+## Reestruturação modular concluída em 2026-08-09
+
+- domínio organizacional, modelo canônico decimal e persistência PostgreSQL/Prisma implementados;
+- pipelines idempotentes de extrato e razão, catálogo de layouts, inspeção e mapeamento implementados;
+- matching explicável, exceções, workflow, auditoria, RBAC por empresa, APIs V2 e XLSX implementados;
+- gate integral aprovado: lint, typecheck, build, 177 testes TypeScript e 83 testes Python;
+- cobertura crítica: 92,68% statements, 84,68% branches, 96,50% functions e 96,13% lines;
+- mutation score: 65,42% em 937 mutantes, acima da faixa `low=65` e do bloqueio `break=55`;
+- bloqueio externo: o gate `pnpm test:parity:release` exige `PARITY_FIXTURES_DIR` com PDFs privados e
+  `statement-parser-manifest.json` homologado. Sem esses dados o teste falha propositalmente.
 ## Handoff
 
 Ao retomar:

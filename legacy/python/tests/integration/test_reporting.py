@@ -5,6 +5,7 @@ from openpyxl import load_workbook
 
 from conciliacao.models import ProcessedFile, TechnicalError
 from conciliacao.reporting import ExcelReportGenerator
+
 from ..unit.test_reconciliation import CONFIG, bank, ledger, reconcile
 
 

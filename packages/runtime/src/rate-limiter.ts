@@ -44,7 +44,11 @@ export class RedisRateLimiter implements RateLimiter {
   }
 
   async close(): Promise<void> {
-    if (this.redis.status !== "end") await this.redis.quit();
+    try {
+      if (this.redis.status !== "end") await this.redis.quit();
+    } catch {
+      this.redis.disconnect();
+    }
   }
 
   private hash(value: string): string {

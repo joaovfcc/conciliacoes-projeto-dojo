@@ -24,7 +24,14 @@
     "test:private-statements": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && node scripts/test-private-statements.mjs",
     "test:legacy": "node legacy/python/scripts/run-tests.mjs",
     "typecheck": "pnpm -r typecheck && tsc -p tsconfig.tests.json --noEmit",
-    "lint": "pnpm -r lint && eslint tests vitest.config.ts --max-warnings=0"
+    "lint": "pnpm -r lint && eslint tests vitest.config.ts --max-warnings=0",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:ps": "docker compose ps",
+    "db:logs": "docker compose logs -f postgres",
+    "db:migrate": "pnpm --filter @conciliacao/core exec prisma migrate deploy --schema prisma/schema.prisma",
+    "db:seed": "pnpm --filter @conciliacao/core auth:bootstrap-owner"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

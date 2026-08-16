@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    requireV2Actor(request, companyId, ["PREPARER", "ADMIN"]);
+    await requireV2Actor(request, companyId, ["PREPARER", "ADMIN"]);
     const result = await new InspectLayoutUseCase(new PrismaLayoutRepository(prisma)).execute(
       file.name,
       Buffer.from(await file.arrayBuffer()),

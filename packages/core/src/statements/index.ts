@@ -2,3 +2,8 @@ export * from "./statement-types.js";
 export * from "./layout-detector.js";
 export * from "./generic-statement-parser.js";
 export * from "./profiles/itau-checking-xlsx-v1.js";
+export * from "./profiles/generic-statement-v1.js";
+export * from "./profiles/bradesco-checking-xlsx-v1.js";
+export * from "./profiles/bb-checking-xlsx-v1.js";
+export * from "./profiles/santander-checking-xlsx-v1.js";
+export * from "./profiles/caixa-checking-xlsx-v1.js";

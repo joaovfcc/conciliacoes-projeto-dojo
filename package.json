@@ -13,6 +13,7 @@
     "test:unit": "pnpm --filter @conciliacao/core test:unit && pnpm --filter @conciliacao/runtime test:unit && pnpm --filter @conciliacao/worker test:unit && pnpm --filter @conciliacao/web test:unit",
     "test:components": "pnpm --filter @conciliacao/web test:components",
     "test:integration": "vitest run tests/integration",
+    "test:infrastructure": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && pnpm --filter @conciliacao/worker build && vitest run tests/infrastructure --no-file-parallelism --test-timeout=120000 --hook-timeout=180000",
     "test:e2e": "vitest run tests/e2e",
     "test:security": "vitest run tests/security",
     "test:parity": "vitest run tests/parity",
@@ -31,6 +32,7 @@
     "@vitest/coverage-v8": "4.1.10",
     "cross-env": "10.1.0",
     "eslint": "^9.39.0",
+    "testcontainers": "12.1.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.8"
   }

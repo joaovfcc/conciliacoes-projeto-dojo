@@ -66,6 +66,7 @@ describe("canonical statement source contracts", () => {
     expect(isReconciliationEligibleDocumentType("CURRENT_ACCOUNT")).toBe(true);
     expect(isReconciliationEligibleDocumentType("INVESTMENT_ACTIVITY")).toBe(false);
     expect(isReconciliationEligibleDocumentType("INVESTMENT_POSITION")).toBe(false);
+    expect(isReconciliationEligibleDocumentType("FUND_STATEMENT")).toBe(false);
   });
 
   it("selects by format and score while failing closed on ambiguity", () => {

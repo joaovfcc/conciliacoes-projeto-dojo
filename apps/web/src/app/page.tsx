@@ -1,5 +1,5 @@
-import { ReconciliationApp } from "@/components/reconciliation-app";
+import { AuthenticatedApp } from "@/components/authenticated-app";
 
 export default function HomePage() {
-  return <main><ReconciliationApp /></main>;
+  return <AuthenticatedApp />;
 }

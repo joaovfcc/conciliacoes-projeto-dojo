@@ -26,7 +26,7 @@ export async function POST(
     const runs = new PrismaReconciliationRunRepository(prisma);
     const run = await runs.findById(id);
     if (!run) return Response.json({ error: { code: "NOT_FOUND", message: "Conciliação não encontrada" } }, { status: 404 });
-    const actor = requireV2Actor(request, run.companyId, ["PREPARER", "REVIEWER", "ADMIN"]);
+    const actor = await requireV2Actor(request, run.companyId, ["PREPARER", "REVIEWER", "ADMIN"]);
     const exception = await new ExceptionService(runs, new PrismaAuditRepository(prisma)).execute(
       id,
       exceptionId,

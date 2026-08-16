@@ -1,0 +1,7 @@
+import type { NextRequest } from "next/server";
+import { createConfigurationHandlers } from "@/lib/configuration-api";
+import { createConfigurationRuntime } from "@/lib/configuration-runtime";
+
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  return createConfigurationHandlers(createConfigurationRuntime()).getEffectiveInheritance(request, context);
+}

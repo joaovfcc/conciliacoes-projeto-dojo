@@ -10,21 +10,44 @@ export const GENERIC_STATEMENT_V1: StatementLayoutProfile = {
 
   detection: {
     requiredHeaderGroups: [
-      ["data"],
-      ["histórico", "descrição", "lançamento", "detalhe", "razão social", "movimento"],
-      ["valor", "crédito", "débito", "lançamento (r$)", "importância"]
+      [
+        "data", "dt.", "dt. lançamento", "dt lançamento", "dt movto", "dt. movto",
+        "dt. mov.", "data lançamento", "data movto", "data movimento", "data mov.",
+        "data do lançamento", "dt balancete", "data balancete",
+      ],
+      [
+        "histórico", "descrição", "lançamento", "detalhe", "razão social", "movimento",
+        "movimentação", "natureza", "complemento", "discriminação", "operação",
+        "observação", "memo", "tipo", "detalhamento",
+      ],
+      [
+        "valor", "crédito", "débito", "lançamento (r$)", "importância",
+        "entrada", "saída", "vlr.", "vlr", "montante", "valor (r$)",
+        "débito (r$)", "crédito (r$)", "valor débito", "valor crédito",
+      ],
     ],
     minimumScore: 70,
   },
 
   columns: {
-    date: ["data", "dt."],
-    description: ["histórico", "descrição", "lançamento", "detalhe", "razão social", "movimento"],
-    document: ["documento", "ag/origem", "cpf/cnpj", "num. doc.", "nº", "nr."],
-    amount: ["valor"],
-    debit: ["débito"],
-    credit: ["crédito"],
-    balance: ["saldo"],
+    date: [
+      "data", "dt.", "dt. lançamento", "dt lançamento", "dt movto", "dt. movto",
+      "dt. mov.", "data lançamento", "data movto", "data movimento", "data mov.",
+      "data do lançamento", "dt balancete", "data balancete",
+    ],
+    description: [
+      "histórico", "descrição", "lançamento", "detalhe", "razão social", "movimento",
+      "movimentação", "natureza", "complemento", "discriminação", "operação",
+      "observação", "memo", "detalhamento",
+    ],
+    document: [
+      "documento", "ag/origem", "cpf/cnpj", "num. doc.", "nº", "nr.",
+      "docto.", "docto", "doc.", "doc", "número documento", "nro. doc.",
+    ],
+    amount: ["valor", "vlr.", "vlr", "montante", "importância", "valor (r$)"],
+    debit: ["débito", "debito", "saída", "valor débito", "débito (r$)", "pagamento"],
+    credit: ["crédito", "credito", "entrada", "valor crédito", "crédito (r$)", "recebimento"],
+    balance: ["saldo", "saldo (r$)", "saldo final", "saldo disponível"],
   },
 
   rules: {

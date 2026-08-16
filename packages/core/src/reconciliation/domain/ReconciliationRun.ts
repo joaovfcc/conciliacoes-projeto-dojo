@@ -52,6 +52,10 @@ export interface MatchGroup {
   createdAt: Date;
 }
 
+export function isEffectiveReconciliation(group: MatchGroup): boolean {
+  return group.ruleId !== "RULE_8_BANK_NET_ZERO";
+}
+
 export type ReconciliationRunStatus =
   | "PREPARING"
   | "READY_FOR_REVIEW"

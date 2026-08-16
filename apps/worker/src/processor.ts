@@ -7,7 +7,7 @@ export type ProcessingRuntime = Pick<RuntimeServices, "sessions" | "preflight" |
 export function createJobProcessor(runtime: ProcessingRuntime) {
   return async (job: Job<ProcessingJob>): Promise<void> => {
     const session = await runtime.sessions.get(job.data.sessionId);
-    if (!session || session.closed) return;
+    if (!session || session.closed || ["COMPLETED", "COMPLETED_WITH_ISSUES"].includes(session.status)) return;
     if (job.data.action === "preflight") {
       await runtime.preflight(session);
       return;

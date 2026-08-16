@@ -26,6 +26,9 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
 
   const issues: ImportIssue[] = [];
   const records: StatementRecord[] = [];
+  const balanceMovements: StatementRecord[] = [];
+  let openingBalance: string | undefined;
+  let closingBalance: string | undefined;
 
   for (const sheet of doc.sheets) {
     const classification = classifySheet(sheet);
@@ -51,9 +54,11 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
 
     const sheetAgency = parsed.metadata?.agency || "";
     const sheetAccount = parsed.metadata?.account || "";
+    if (parsed.metadata?.openingBalance !== undefined && openingBalance === undefined) openingBalance = money(parsed.metadata.openingBalance);
+    if (parsed.metadata?.closingBalance !== undefined) closingBalance = money(parsed.metadata.closingBalance);
 
     for (const tx of parsed.transactions) {
-      records.push(statementRecord(file, tx.evidence.rowNumber, {
+      const record = statementRecord(file, tx.evidence.rowNumber, {
         date: tx.date,
         document: tx.document || "",
         history: tx.description,
@@ -65,7 +70,12 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
         account: sheetAccount,
         extractionMethod: "TABULAR",
         parser: profile.id
-      }));
+      });
+      records.push(record);
+      if (!profile.rules.balanceExclusionPatterns?.some((pattern) =>
+        new RegExp(pattern).test(normalizeForPattern(record.history)))) {
+        balanceMovements.push(record);
+      }
     }
   }
 
@@ -73,6 +83,21 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
     issues.push(issue("ERROR", "TABULAR_SEM_MOVIMENTOS", "Nenhum movimento conciliável encontrado no arquivo tabular.", file.id));
   }
 
-  const metadata = statementMetadata(file, records, "TABULAR", records[0]?.evidence?.parser || "GENERIC_TABULAR");
+  const metadata = statementMetadata(
+    file,
+    records,
+    "TABULAR",
+    records[0]?.evidence?.parser || "GENERIC_TABULAR",
+    [],
+    {
+      ...(openingBalance !== undefined ? { openingBalance } : {}),
+      ...(closingBalance !== undefined ? { closingBalance } : {}),
+      balanceMovements,
+    },
+  );
   return { records, metadata, issues, investments: [] };
+}
+
+function normalizeForPattern(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
 }

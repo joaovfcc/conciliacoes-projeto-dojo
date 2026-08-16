@@ -61,8 +61,9 @@ function detectProfile(sheet: ExtractedTabularSheet, profile: StatementLayoutPro
     if (missing.length > 0) continue;
     const content = contentScore(sheet.rows, index);
     const sheetBonus = profile.detection.sheetNameAliases?.some((name) => normalizeHeader(sheet.name) === normalizeHeader(name)) ? 20 : 0;
-    const score = matchedHeaders.length * 20 + exact * 5 + sheetBonus + content.score;
-    const requiresReview = content.warnings.length > 0 || score < Math.max(profile.detection.minimumScore, 70);
+    const bankSpecificBonus = profile.bankCode ? 15 : 0;
+    const score = matchedHeaders.length * 20 + exact * 5 + sheetBonus + bankSpecificBonus + content.score;
+    const requiresReview = content.warnings.length > 0 || score < profile.detection.minimumScore;
     const candidate: LayoutMatch = {
       profileId: profile.id, score, confidence: score >= 100 && !requiresReview ? "HIGH" : score >= 70 ? "MEDIUM" : "LOW",
       matchedHeaders, missingRequiredGroups: [], headerRowIndex: index, warnings: content.warnings, requiresReview,
@@ -78,7 +79,33 @@ export function detectLayoutResult(sheet: ExtractedTabularSheet, profiles: State
     .sort((left, right) => right.score - left.score || left.profileId.localeCompare(right.profileId));
   const best = candidates[0] ?? null;
   if (!best) return { match: null, candidates: [], warnings: ["LAYOUT_NOT_DETECTED"], requiresReview: true };
-  if (candidates[1] && best.score - candidates[1].score < 15) return { match: null, candidates, warnings: ["LAYOUT_AMBIGUOUS"], requiresReview: true };
+
+  const profileForCandidate = (c: LayoutMatch) => profiles.find((p) => p.id === c.profileId);
+  const bestProfile = profileForCandidate(best);
+  const isGeneric = (c: LayoutMatch) => profileForCandidate(c)?.bankCode === "";
+
+  // When the best match is bank-specific, check ambiguity only against other bank-specific profiles
+  if (bestProfile && bestProfile.bankCode !== "") {
+    const otherSpecific = candidates.find((c) => c.profileId !== best.profileId && !isGeneric(c));
+    if (otherSpecific && best.score - otherSpecific.score < 15) {
+      // Bank-specific profiles are ambiguous — fall back to generic if available
+      const genericFallback = candidates.find((c) => isGeneric(c));
+      if (genericFallback) {
+        return { match: genericFallback, candidates, warnings: ["BANK_SPECIFIC_AMBIGUOUS_GENERIC_FALLBACK"], requiresReview: genericFallback.requiresReview };
+      }
+      return { match: null, candidates, warnings: ["LAYOUT_AMBIGUOUS"], requiresReview: true };
+    }
+  }
+
+  // Standard ambiguity check: skip generic runner-up only when best is bank-specific
+  const runnerUp = candidates[1];
+  if (runnerUp && best.score - runnerUp.score < 15) {
+    const bestIsSpecific = bestProfile && bestProfile.bankCode !== "";
+    if (!bestIsSpecific || !isGeneric(runnerUp)) {
+      return { match: null, candidates, warnings: ["LAYOUT_AMBIGUOUS"], requiresReview: true };
+    }
+  }
+
   return { match: best, candidates, warnings: best.warnings, requiresReview: best.requiresReview };
 }
 

@@ -28,7 +28,7 @@ describe("Itaú Checking XLSX Parser Characterization", () => {
       ["02/12/2025", "SALDO ANTERIOR", "", "0.00", "100.00"],
       ["03/12/2025", "TARIFA BANCARIA", "12345", "-10.00", "90.00"],
       ["04/12/2025", "RECEBIMENTO PIX", "54321", "500.00", "590.00"],
-      ["05/12/2025", "SALDO FINAL", "", "", "590.00"],
+      ["05/12/2025", "SALDO TOTAL", "", "", "590.00"],
       ["Fim do Extrato"],
     ]);
 
@@ -63,7 +63,124 @@ describe("Itaú Checking XLSX Parser Characterization", () => {
     expect(records[1]!.document).toBe("54321");
     expect(records[1]!.value).toBe("500.00"); // Positive amount
 
+    expect(records.map((record) => record.runningBalance)).toEqual(["90.00", "590.00"]);
+    expect(metadata.finalBalance).toBe("590.00");
+    expect(metadata.openingBalance).toBe("100.00");
+    expect(metadata.closingBalance).toBe("590.00");
+    expect(metadata.balanceCheck).toEqual(expect.objectContaining({
+      status: "PASSED",
+      openingBalance: "100.00",
+      creditTotal: "500.00",
+      debitTotal: "-10.00",
+      movementTotal: "490.00",
+      expectedClosingBalance: "590.00",
+      extractedClosingBalance: "590.00",
+      difference: "0.00",
+    }));
+
     expect(issues.length).toBe(0);
+  });
+
+  it("combines transaction and counterparty without dropping movements with an empty counterparty", async () => {
+    const buffer = await createXlsxBuffer("lancamentos", [
+      ["Itau Empresas"],
+      ["Agencia:", "0191"],
+      ["Conta:", "0026775-6"],
+      [],
+      ["Data", "Lancamento", "Ag/origem", "Razao Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["01/12/2025", "PAGAMENTOS A FORNECEDORES", "", "VIVO FIXO NAC", "02.558.157/0001-62", "-108,29", "891,71"],
+      ["02/12/2025", "TARIFA BANCARIA", "", "", "", "-10,00", "881,71"],
+    ]);
+
+    const input: SourceFileInput = {
+      id: "test-file-aliases",
+      originalName: "itau-colunas-completas.xlsx",
+      kind: "STATEMENT",
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer,
+    };
+
+    const { records, issues } = await parseTabularStatement(input, [ITAU_CHECKING_XLSX_V1]);
+
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.value)).toEqual(["-108.29", "-10.00"]);
+    expect(records[0]?.history).toBe("PAGAMENTOS A FORNECEDORES - VIVO FIXO NAC");
+    expect(records[0]?.document).toBe("02.558.157/0001-62");
+    expect(records[1]?.history).toBe("TARIFA BANCARIA");
+    expect(issues).toEqual([]);
+  });
+
+  it("does not expose an intermediate running balance as the final balance", async () => {
+    const buffer = await createXlsxBuffer("lancamentos", [
+      ["Itau Empresas"],
+      ["Agencia:", "0191"],
+      ["Conta:", "0026775-6"],
+      ["Data", "Lancamento", "Valor (R$)", "Saldo (R$)"],
+      ["01/12/2025", "PAGAMENTO", "-10,00", "90,00"],
+      ["02/12/2025", "RECEBIMENTO", "20,00", ""],
+    ]);
+
+    const input: SourceFileInput = {
+      id: "test-file-partial-balance",
+      originalName: "itau-saldo-parcial.xlsx",
+      kind: "STATEMENT",
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer,
+    };
+
+    const { metadata } = await parseTabularStatement(input, [ITAU_CHECKING_XLSX_V1]);
+
+    expect(metadata.balanceCheck?.status).toBe("NOT_AVAILABLE");
+    expect(metadata.finalBalance).toBeUndefined();
+  });
+
+  it("reads structural balances when the description starts with the configured marker", async () => {
+    const buffer = await createXlsxBuffer("lancamentos", [
+      ["Itau Empresas"],
+      ["Agencia:", "0191"],
+      ["Conta:", "0026775-6"],
+      ["Data", "Lancamento", "Valor (R$)", "Saldo (R$)"],
+      ["01/12/2025", "SALDO ANTERIOR CONTA CORRENTE", "", "100,00"],
+      ["01/12/2025", "PAGAMENTO", "-10,00", "90,00"],
+      ["31/12/2025", "SALDO TOTAL DISPONIVEL", "", "90,00"],
+    ]);
+    const input: SourceFileInput = {
+      id: "test-file-prefixed-balance",
+      originalName: "itau-saldo-prefixo.xlsx",
+      kind: "STATEMENT",
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer,
+    };
+
+    const { metadata, records } = await parseTabularStatement(input, [ITAU_CHECKING_XLSX_V1]);
+
+    expect(records).toHaveLength(1);
+    expect(metadata).toMatchObject({ openingBalance: "100.00", closingBalance: "90.00", finalBalance: "90.00" });
+  });
+
+  it("preserves automatic applications but excludes them from the consolidated balance control", async () => {
+    const buffer = await createXlsxBuffer("lancamentos", [
+      ["Itau Empresas"],
+      ["Agencia:", "0191"],
+      ["Conta:", "0026775-6"],
+      ["Data", "Lancamento", "Valor (R$)", "Saldo (R$)"],
+      ["01/12/2025", "SALDO ANTERIOR", "", "100,00"],
+      ["01/12/2025", "APL APLIC AUT MAIS", "-50,00", ""],
+      ["01/12/2025", "RECEBIMENTO", "10,00", ""],
+      ["31/12/2025", "SALDO TOTAL", "", "110,00"],
+    ]);
+    const input: SourceFileInput = {
+      id: "test-file-application-balance",
+      originalName: "itau-aplicacao-saldo.xlsx",
+      kind: "STATEMENT",
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer,
+    };
+
+    const { metadata, records } = await parseTabularStatement(input, [ITAU_CHECKING_XLSX_V1]);
+
+    expect(records.map((record) => record.history)).toEqual(["APL APLIC AUT MAIS", "RECEBIMENTO"]);
+    expect(metadata.balanceCheck).toMatchObject({ status: "PASSED", movementTotal: "10.00" });
   });
 
   it("should reject a file with an unrecognized layout", async () => {

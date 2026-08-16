@@ -8,7 +8,7 @@ const confirmationSchema = z.object({
   branch: z.string().trim().max(120).optional(),
   period: z.string().regex(/^\d{6}$/),
   valueTolerance: z.string().regex(/^\d+(?:[.,]\d{1,2})?$/),
-  dateToleranceDays: z.number().int().min(0).max(31),
+  dateToleranceDays: z.number().int().min(0).max(3),
   mappings: z.array(z.object({
     ledgerAccount: z.string().trim().min(1).max(80),
     statementFileIds: z.array(z.string().trim().min(1)).min(1).max(5),

@@ -17,7 +17,7 @@ const requestSchema = z.object({
   profileId: z.string().trim().min(1),
   periodId: z.string().trim().min(1),
   valueTolerance: z.string().regex(/^\d+(?:\.\d{1,2})?$/).default("0.01"),
-  dateToleranceDays: z.number().int().min(0).max(31).default(2),
+  dateToleranceDays: z.number().int().min(0).max(3).default(2),
   matching: z.object({
     descriptionSimilarityThreshold: z.number().min(0).max(1).optional(),
     allowOneToMany: z.boolean().default(false),
@@ -30,7 +30,7 @@ const requestSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const body = requestSchema.parse(await request.json());
-    const actor = requireV2Actor(request, body.companyId, ["PREPARER", "ADMIN"]);
+    const actor = await requireV2Actor(request, body.companyId, ["PREPARER", "ADMIN"]);
 
     const transactionRepo = new PrismaTransactionRepository(prisma);
     const ledgerRepo = new PrismaLedgerRepository(prisma);

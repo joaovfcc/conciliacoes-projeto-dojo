@@ -13,6 +13,7 @@
     "lint": "eslint src tests --max-warnings=0"
   },
   "dependencies": {
+    "@conciliacao/core": "workspace:*",
     "@conciliacao/runtime": "workspace:*",
     "bullmq": "^5.63.0"
   },

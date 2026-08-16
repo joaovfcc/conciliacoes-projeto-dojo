@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
   try {
     const companyId = request.nextUrl.searchParams.get("companyId");
     if (!companyId) return Response.json({ error: { code: "COMPANY_REQUIRED", message: "Informe companyId" } }, { status: 400 });
-    requireV2Actor(request, companyId);
+    await requireV2Actor(request, companyId);
     const layoutRepo = new PrismaLayoutRepository(prisma);
     const profiles = await layoutRepo.findAll();
 
@@ -74,7 +74,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const data = profileSchema.parse(await request.json());
-    requireV2Actor(request, data.companyId, ["ADMIN"]);
+    const actor = await requireV2Actor(request, data.companyId, ["ADMIN"]);
     const account = await new PrismaBankAccountRepository(prisma).findById(data.bankAccountId);
     if (!account || account.companyId !== data.companyId) {
       return Response.json(
@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
     };
 
     await layoutRepo.save(profile, {
-      approvedBy: requireV2Actor(request).actorId,
+      approvedBy: actor.actorId,
       approvedAt: new Date(),
       fingerprint: data.fingerprint,
       bankAccountId: data.bankAccountId,

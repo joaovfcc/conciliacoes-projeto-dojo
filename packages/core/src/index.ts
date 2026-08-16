@@ -1,4 +1,76 @@
 export * from "./types.js";
+export * from "./contracts/reconciliation-v1.js";
+export {
+  ConfigurationError,
+  ConfigurationService,
+  EffectiveConfigurationResolver,
+  FakeReconciliationEngineAdapter,
+  InMemoryConfigurationRepository,
+  PrismaConfigurationRepository,
+  ProfileSnapshotService,
+  RealReconciliationEngineAdapter,
+  ReconciliationOrchestrator,
+  RoutingService,
+  assertEffectivePeriod,
+  assertIsoDate,
+  effectivePeriodsOverlap,
+  isEffectiveAt,
+  normalizeAccount,
+  normalizeAgency,
+} from "./configuration/index.js";
+export type {
+  AdministrativeAuditAction,
+  AdministrativeAuditEvent,
+  Bank,
+  BankDirectory,
+  CloneProfileInput,
+  ConfigBankAccount,
+  ConfigLedgerAccount,
+  ConfigurationActor,
+  ConfigurationCommandContext,
+  ConfigurationJsonObject,
+  ConfigurationJsonPrimitive,
+  ConfigurationJsonValue,
+  ConfigurationRepository,
+  ConfigurationPrismaClient,
+  ConfigurationRole,
+  CreateRecordInput,
+  CreateBankAccountInput,
+  CreateProfileInput,
+  EffectivePeriod,
+  EffectiveInheritanceLevel,
+  EffectiveConfigurationResolution,
+  EffectiveConfigurationScope,
+  ConfigurationProvenance,
+  EngineExecution,
+  EnginePort,
+  FakeEngineScenario,
+  ImportMappingVersion,
+  InheritanceConfigurationNode,
+  InheritanceConfigurationOverride,
+  InheritanceLevel,
+  LegalEntity,
+  NewProfileVersionInput,
+  Organization,
+  ProfileVersion,
+  ProfileVersionStatus,
+  PrepareReconciliationInput,
+  PreparedReconciliation,
+  PublishedSnapshot,
+  RecordStatus,
+  SaveWizardDraftInput,
+  SimulateInput,
+  Simulation,
+  RunMode,
+  RunRecord,
+  RunStatus,
+  CreateProfileSnapshotInput,
+  RoutingResult,
+  WizardDraft,
+  AccountMapping as ConfigurationAccountMapping,
+  ReconciliationProfile as ConfigurationReconciliationProfile,
+} from "./configuration/index.js";
+export * from "./presentation.js";
 export * from "./normalization.js";
 export * from "./reconciliation.js";
 export * from "./parsers/types.js";
@@ -72,5 +144,9 @@ export * from "./reconciliation/application/WorkflowService.js";
 export * from "./reconciliation/application/ExceptionService.js";
 export * from "./reconciliation/application/ReconciliationReport.js";
 export * from "./reconciliation/infrastructure/InMemoryReconciliationRunRepository.js";
+export * from "./reconciliation/domain/CompletedReconciliation.js";
+export * from "./reconciliation/infrastructure/PrismaCompletedReconciliationRepository.js";
+export * from "./reconciliation/infrastructure/InMemoryCompletedReconciliationRepository.js";
 export * from "./shared/domain/Authorization.js";
 export * from "./database.js";
+export * from "./auth/index.js";

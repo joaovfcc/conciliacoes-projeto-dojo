@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const actor = requireV2Actor(request, companyId, ["PREPARER", "ADMIN"]);
+    const actor = await requireV2Actor(request, companyId, ["PREPARER", "ADMIN"]);
 
     const buffer = Buffer.from(await file.arrayBuffer());
 

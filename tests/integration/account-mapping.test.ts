@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { InMemoryCompletedReconciliationRepository } from "../../packages/core/src/index";
 import type { ConfirmProcessingRequest, LedgerRecord, PreflightResult, StatementRecord } from "../../packages/core/src/types";
 import { loadRuntimeConfig } from "../../packages/runtime/src/config";
 import { LocalObjectStore } from "../../packages/runtime/src/object-store";
@@ -56,11 +57,14 @@ const confirmation: ConfirmProcessingRequest = {
 describe("mapeamento de conta bancária", () => {
   it("bloqueia a conciliação quando o extrato pertence a uma conta incompatível", async () => {
     const config = { ...loadRuntimeConfig({}), localStoragePath: ".test-storage" };
-    const runtime = new RuntimeServices(config, new MemorySessionStore(config), new LocalObjectStore(config));
+    const runtime = new RuntimeServices(config, new MemorySessionStore(config), new LocalObjectStore(config), new InMemoryCompletedReconciliationRepository());
     const session: ReconciliationSession = {
       id: "session-1",
       tokenHash: "hash",
       clientKey: "client",
+      actorId: "user",
+      organizationId: "org",
+      companyId: "company",
       createdAt: "2026-08-02T00:00:00.000Z",
       expiresAt: "2026-08-02T02:00:00.000Z",
       lastHeartbeatAt: "2026-08-02T00:00:00.000Z",

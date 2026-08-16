@@ -2,6 +2,10 @@ export const resultStatuses = [
   "AUTO_MATCH_EXACT",
   "AUTO_MATCH_DATE_TOLERANCE",
   "AUTO_MATCH_VALUE_DATE",
+  "AUTO_MATCH_GROUP",
+  "AUTO_MATCH_DAILY_TOTAL",
+  "BANK_NET_ZERO",
+  "AUTO_APPLICATION_EXCLUDED",
   "VALUE_ONLY_SUGGESTION",
   "VALUE_DIVERGENCE",
   "DATE_DIVERGENCE",
@@ -23,9 +27,11 @@ export type DocumentKind =
   | "BROKERAGE_NOTE"
   | "PASSWORD_PROTECTED"
   | "UNKNOWN";
-export type StatementClassification = Extract<DocumentKind, "CURRENT_ACCOUNT" | "INVESTMENT_ACTIVITY" | "INVESTMENT_POSITION">;
+export type StatementClassification = Exclude<DocumentKind, "PASSWORD_PROTECTED" | "UNKNOWN">;
 export type InvestmentEntryKind = "APPLICATION" | "REDEMPTION" | "EARNING" | "POSITION";
 export type DecisionLevel = "AUTOMATIC" | "REVIEW_REQUIRED" | "BLOCKED";
+export type BalanceMovementEffect = "ADDS_TO_BALANCE" | "SUBTRACTS_FROM_BALANCE";
+export type SignProfile = "BANK_ASSET" | "BANK_LIABILITY" | "INVESTMENT_ASSET";
 
 export type NormalizedIdentifier = {
   raw: string;
@@ -82,6 +88,7 @@ export type LedgerRecord = {
   document: string;
   history: string;
   value: string;
+  runningBalance?: string;
   sourceId: string;
   evidence: SourceEvidence;
 };
@@ -136,6 +143,10 @@ export type DetectedLedgerAccount = {
   agency: string;
   bankAccount: string;
   recordCount: number;
+  openingBalance?: string;
+  closingBalance?: string;
+  balanceCheck?: BalanceCheck;
+  balanceMovementEffect?: BalanceMovementEffect;
 };
 
 export type DetectedStatement = {
@@ -150,6 +161,8 @@ export type DetectedStatement = {
   parser: string;
   classification: StatementClassification;
   reconciliationEligible: boolean;
+  openingBalance?: string;
+  closingBalance?: string;
   finalBalance?: string;
   balanceCheck?: BalanceCheck;
   confidence?: string;
@@ -188,12 +201,49 @@ export type ConfirmProcessingRequest = {
   dateToleranceDays: number;
   mappings: AccountMapping[];
   idempotencyKey: string;
+  evaluatedAt?: string;
 };
 
 export type AccountMapping = {
   ledgerAccount: string;
   statementFileIds: string[];
-  signProfile: "BANK_ASSET" | "BANK_LIABILITY" | "INVESTMENT_ASSET";
+  signProfile: SignProfile;
+};
+
+export type ControlStatus = "PASSED" | "FAILED" | "NOT_AVAILABLE";
+
+export type ProcessingControls = {
+  tolerance: string;
+  signProfiles: SignProfile[];
+  movements: {
+    bankConciliable: string;
+    ledger: string;
+    difference: string;
+    status: ControlStatus;
+  };
+  balances: {
+    bankOpening?: string;
+    ledgerOpening?: string;
+    openingDifference?: string;
+    openingStatus: ControlStatus;
+    bankClosing?: string;
+    ledgerClosing?: string;
+    closingDifference?: string;
+    closingStatus: ControlStatus;
+  };
+  coverage: {
+    lines: { covered: string; total: string; percentage: string };
+    absoluteValue: { covered: string; total: string; percentage: string };
+  };
+  countsByStatus: Array<{ status: ResultStatus; count: string }>;
+  pendingByDate: Array<{
+    date: string;
+    bankCount: string;
+    ledgerCount: string;
+    bankValue: string;
+    ledgerValue: string;
+    difference: string;
+  }>;
 };
 
 export type ReconciliationResult = {
@@ -204,10 +254,16 @@ export type ReconciliationResult = {
   reason: string;
   ledger?: LedgerRecord;
   statement?: StatementRecord;
+  ledgers?: LedgerRecord[];
+  statements?: StatementRecord[];
   candidates?: StatementRecord[];
   valueDifference?: string;
   dateDifference?: number;
   valueTolerance: string;
+  ruleVersion?: string;
+  score?: number;
+  matchGroup?: import("./reconciliation/domain/ReconciliationEngine.js").ReconciliationMatchGroup;
+  audit?: import("./reconciliation/domain/ReconciliationEngine.js").ReconciliationAuditEntry;
 };
 
 export type AccountSummary = {
@@ -236,4 +292,13 @@ export type ProcessingResult = {
   issues: ImportIssue[];
   files: DetectedStatement[];
   investments: InvestmentEntry[];
+  controls: ProcessingControls;
+  reconciliation?: {
+    ruleVersion: string;
+    evaluatedAt: string;
+    transactions: import("./reconciliation/domain/ReconciliationEngine.js").SerializedReconciliationTransaction[];
+    matchGroups: import("./reconciliation/domain/ReconciliationEngine.js").ReconciliationMatchGroup[];
+    audit: import("./reconciliation/domain/ReconciliationEngine.js").ReconciliationAuditEntry[];
+    metrics: import("./reconciliation/domain/ReconciliationEngine.js").ReconciliationMetrics;
+  };
 };

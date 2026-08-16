@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   InMemoryLedgerRepository,
+  InMemoryEvidenceRepository,
+  InMemoryAuditRepository,
   InMemoryReconciliationRunRepository,
   InMemoryTransactionRepository,
   ReconcileTransactionsUseCase,
@@ -100,5 +102,75 @@ describe("BR-01/BR-10 — escopo organizacional do matching", () => {
       status: "AUTO_CONFIRMED",
     });
     expect(result.exceptions).toHaveLength(0);
+  });
+
+  it("preserva decisões automáticas terminais sem criar SOURCE_ERROR", async () => {
+    const transactions = new InMemoryTransactionRepository();
+    const ledgers = new InMemoryLedgerRepository();
+    const evidences = new InMemoryEvidenceRepository();
+    const audit = new InMemoryAuditRepository();
+    await transactions.saveAll([
+      createNormalizedTransaction({
+        id: "statement-net-positive",
+        companyId: "company-1",
+        accountId: "bank-account-1",
+        importBatchId: "statement-batch",
+        transactionDate: "2025-12-10",
+        amount: "100.00",
+        nature: "DEBIT",
+        description: "MOVIMENTO POSITIVO",
+        source: { fileId: "statement-file", rawValues: {} },
+        parsing: { layoutId: "layout-1", layoutVersion: 1, confidence: 1, warnings: [] },
+      }),
+      createNormalizedTransaction({
+        id: "statement-net-negative",
+        companyId: "company-1",
+        accountId: "bank-account-1",
+        importBatchId: "statement-batch",
+        transactionDate: "2025-12-10",
+        amount: "100.00",
+        nature: "CREDIT",
+        description: "MOVIMENTO NEGATIVO",
+        source: { fileId: "statement-file", rawValues: {} },
+        parsing: { layoutId: "layout-1", layoutVersion: 1, confidence: 1, warnings: [] },
+      }),
+      createNormalizedTransaction({
+        id: "statement-auto-application",
+        companyId: "company-1",
+        accountId: "bank-account-1",
+        importBatchId: "statement-batch",
+        transactionDate: "2025-12-11",
+        amount: "50.00",
+        nature: "DEBIT",
+        description: "APL APLIC AUT MAIS",
+        source: { fileId: "statement-file", rawValues: {} },
+        parsing: { layoutId: "layout-1", layoutVersion: 1, confidence: 1, warnings: [] },
+      }),
+    ]);
+
+    const result = await new ReconcileTransactionsUseCase(
+      transactions,
+      ledgers,
+      undefined,
+      evidences,
+      audit,
+    ).execute({
+      companyId: "company-1",
+      profileId: "profile-1",
+      periodId: "period-1",
+      preparerId: "preparer-1",
+    });
+
+    expect(result.matchGroups).toContainEqual(expect.objectContaining({
+      ruleId: "RULE_8_BANK_NET_ZERO",
+      matchedStatementIds: ["statement-net-positive", "statement-net-negative"],
+      status: "AUTO_CONFIRMED",
+    }));
+    expect(result.exceptions).toEqual([]);
+    const exclusionEvidence = evidences.evidences.find((evidence) =>
+      evidence.content?.status === "AUTO_APPLICATION_EXCLUDED");
+    expect(exclusionEvidence).toBeDefined();
+    expect(exclusionEvidence).not.toHaveProperty("exceptionId");
+    expect(audit.events[0]?.metadata).toMatchObject({ automaticMatches: 0, exceptions: 0 });
   });
 });

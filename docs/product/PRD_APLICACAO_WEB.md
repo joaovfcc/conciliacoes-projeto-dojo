@@ -1,35 +1,33 @@
-# PRD — Aplicação pública de conciliação bancária
+# PRD — Aplicação autenticada de conciliação bancária
 
-**Versão:** 2.0  
+**Versão:** 3.0
 **Status:** aprovado para implementação do MVP  
-**Atualização:** 1º de agosto de 2026
+**Atualização:** 13 de agosto de 2026
 
 ## 1. Resumo executivo
 
-A aplicação compara um razão gerado pelo ERP Protheus com um a cinco extratos bancários. O uso é feito integralmente pelo navegador, sem terminal, instalação, login, cadastro ou identificação do visitante. A conferência principal ocorre em tela; o XLSX completo, sem macros, é uma opção de download.
+A aplicação compara um razão gerado pelo ERP Protheus com um a cinco extratos bancários. O uso é feito integralmente pelo navegador, com login obrigatório e acesso limitado à organização e às empresas autorizadas. A conferência principal ocorre em tela; o XLSX completo, sem macros, é uma opção de download.
 
-A aplicação é pública, mas cada execução é isolada por um token secreto temporário. Não existe histórico, listagem ou recuperação em outro navegador. Arquivos e resultados financeiros são temporários e devem ser eliminados ao concluir, falhar, fechar, abandonar ou atingir o limite de duas horas.
+A identidade pertence a uma organização e recebe papéis operacionais por empresa. Arquivos de entrada são temporários e eliminados ao concluir ou falhar; resultados e evidências autenticados permanecem recuperáveis por um ano.
 
-Este documento substitui as decisões anteriores de autenticação corporativa, perfis, banco relacional, configuração de contas por XLSX montado no deploy e hospedagem obrigatória na Vercel. O identificador `WEB-RF-001` foi removido e não será reutilizado.
+Este documento substitui a decisão anterior de acesso público e anônimo. A aplicação usa PostgreSQL para identidade, configuração, workflow, histórico e auditoria; Redis e storage privado continuam responsáveis por sessão operacional, fila e arquivos temporários.
 
 ## 2. Objetivos e fora de escopo
 
 ### Objetivos
 
 - permitir uso por pessoas sem conhecimento técnico;
-- aceitar qualquer empresa, filial e conta, sem cadastro prévio;
+- operar nas empresas, filiais e contas previamente autorizadas e configuradas;
 - detectar e confirmar metadados antes da conciliação;
 - preservar as regras conservadoras um-para-um 1–9;
 - exibir resumo, detalhes e evidências em tela;
 - gerar o XLSX completo somente sob demanda;
 - funcionar em qualquer infraestrutura que execute containers, Redis compatível e storage S3 compatível;
-- não deixar resíduos financeiros depois do encerramento ou TTL.
+- eliminar uploads depois do processamento e eliminar resultados após um ano.
 
 ### Fora do escopo do MVP
 
-- autenticação, SSO, OAuth, Entra ID, usuários, organizações, papéis e permissões;
-- histórico, recuperação de sessão, comentários, aprovação ou alteração de resultado;
-- banco relacional;
+- SSO, OAuth, Entra ID, MFA, cadastro público e recuperação de senha por e-mail;
 - integração direta com Protheus ou bancos;
 - agrupamentos muitos-para-muitos;
 - XLSM, macros ou conteúdo ativo;
@@ -37,8 +35,8 @@ Este documento substitui as decisões anteriores de autenticação corporativa, 
 
 ## 3. Jornada principal
 
-1. O visitante abre a aplicação pública.
-2. Aceita o aviso de autorização, processamento temporário, eliminação e impossibilidade de recuperação.
+1. O usuário autentica com e-mail e senha.
+2. Seleciona uma empresa para a qual possui acesso.
 3. Envia exatamente um razão CSV ou XLSX.
 4. Envia de um a cinco extratos CSV, XLSX, OFX ou PDF.
 5. Informa a tolerância monetária, em decimal exato.
@@ -48,29 +46,26 @@ Este documento substitui as decisões anteriores de autenticação corporativa, 
 9. O worker executa extração, OCR quando necessário, normalização e conciliação.
 10. O resultado aparece no dashboard e nas tabelas de conferência.
 11. O visitante pode baixar o XLSX completo.
-12. Encerrar, abandonar ou exceder o TTL cancela a execução e elimina seus dados.
+12. O resultado permanece no histórico autorizado por um ano; arquivos enviados são eliminados após o processamento.
 
 ## 4. Requisitos funcionais
 
-### WEB-RF-002 — Acesso anônimo e isolamento
+### WEB-RF-002 — Autenticação e isolamento
 
-- A aplicação é acessível sem autenticação.
-- Ao criar uma sessão, o servidor gera um token aleatório de 256 bits.
-- O navegador mantém o token apenas em `sessionStorage` e memória.
-- O servidor persiste somente o hash SHA-256 do token.
-- O token não pode aparecer em URL, log ou telemetria.
-- Todas as rotas de uma execução exigem o token por `Authorization: Bearer`.
-- O fechamento via `sendBeacon` pode enviar o token no corpo da requisição, nunca na URL.
-- Uma sessão não consulta nem altera outra, inclusive quando conhece seu identificador.
-- Não existe endpoint de listagem de sessões.
+- Toda rota de conciliação exige usuário e sessão ativos.
+- O access JWT dura dez minutos e permanece somente em memória.
+- O refresh token é opaco, rotativo, persistido somente por hash e enviado em cookie `HttpOnly`.
+- O tenant é a organização; papéis operacionais são concedidos por empresa.
+- `OWNER` administra a organização; `PREPARER`, `REVIEWER`, `ADMIN` e `AUDITOR` limitam operações por empresa.
+- Nenhuma credencial pode aparecer em URL, log, telemetria ou Web Storage.
 
 ### WEB-RF-003 — Tela inicial
 
-A tela deve explicar o objetivo, os formatos, a temporalidade dos dados e os limites. O botão de início permanece desabilitado até o aceite do aviso.
+A tela deve apresentar login, troca obrigatória de senha temporária, empresas autorizadas, objetivo, formatos, retenção e limites.
 
 ### WEB-RF-005 — Criação da execução
 
-A criação não solicita empresa, conta ou usuário. Deve rejeitar excesso de sessões por IP antes de aceitar uploads e retornar resposta sem cache.
+A criação exige usuário, empresa e conta autorizados. Deve rejeitar excesso por IP, usuário e empresa antes de aceitar uploads e retornar resposta sem cache.
 
 ### WEB-RF-006 — Upload privado
 
@@ -161,15 +156,11 @@ Cancelamento explícito, fechamento e expiração devem marcar cancelamento, imp
 
 ### WEB-RF-027 — Retenção e exclusão
 
-- heartbeat a cada 30 segundos;
-- tolerância de cinco minutos sem heartbeat;
-- reconexão dentro da tolerância preserva a execução;
-- limite absoluto de duas horas desde a criação;
-- `sendBeacon` solicita limpeza imediata no fechamento;
 - arquivos são apagados ao concluir ou falhar definitivamente;
-- resultados permanecem no Redis somente enquanto a página está ativa;
 - lifecycle do storage remove resíduos após duas horas;
-- apenas métricas técnicas anônimas ficam por 30 dias.
+- resultados e evidências persistem por um ano;
+- sessões expiram após oito horas de inatividade ou 24 horas absolutas;
+- apenas métricas técnicas sem conteúdo financeiro ficam por 30 dias.
 
 ## 5. APIs
 
@@ -187,6 +178,11 @@ GET  /api/sessions/{id}/status
 GET  /api/sessions/{id}/summary
 GET  /api/sessions/{id}/results
 GET  /api/sessions/{id}/export.xlsx
+POST /api/auth/login
+POST /api/auth/refresh
+POST /api/auth/logout
+GET  /api/auth/me
+POST /api/auth/change-password
 ```
 
 ```ts
@@ -199,7 +195,7 @@ type ConfirmProcessingRequest = {
 };
 ```
 
-Não haverá rota de listagem, recuperação ou histórico.
+Haverá listagem e recuperação apenas das execuções da organização e das empresas autorizadas ao usuário.
 
 ## 6. Estados
 
@@ -212,14 +208,15 @@ qualquer estado ativo → CANCELLING → CANCELLED
 sem heartbeat ou TTL absoluto → EXPIRED
 ```
 
-## 7. Limites públicos
+## 7. Limites operacionais
 
 Todos os valores são configuráveis por ambiente; estes são os padrões:
 
 | Escopo | Limite |
 |---|---:|
-| sessões ativas por IP | 1 |
-| novas sessões por IP/janela móvel de 1 hora | 3 |
+| tentativas de login por IP/e-mail em 15 minutos | 5 |
+| refresh por sessão/IP em 5 minutos | 30 |
+| troca ou reset de senha por usuário em 1 hora | 5 |
 | razão por sessão | 1 |
 | extratos por sessão | 5 |
 | tamanho por arquivo | 25 MB |
@@ -228,7 +225,8 @@ Todos os valores são configuráveis por ambiente; estes são os padrões:
 | OCR simultâneo | 2 jobs |
 | fila aguardando | 20 jobs |
 | TTL sem heartbeat | 5 minutos |
-| TTL absoluto | 2 horas |
+| inatividade da sessão autenticada | 8 horas |
+| TTL absoluto da sessão autenticada | 24 horas |
 
 Ao lotar a fila, responder `429` ou `503`, incluir `Retry-After` e não preservar uploads da tentativa rejeitada. O IP só pode vir de cabeçalhos definidos por proxies confiáveis; a borda deve remover cabeçalhos fornecidos diretamente pelo visitante.
 
@@ -241,7 +239,7 @@ Navegador
       → Redis compatível: sessão, resultado, rate limit e BullMQ
       → storage S3 compatível: objetos privados e temporários
   → worker TypeScript
-      → antivírus → parser → Poppler/Tesseract → motor → Redis
+       → antivírus → parser → Poppler/Tesseract → motor → PostgreSQL/Redis
 ```
 
 - `apps/web`: interface, rotas e upload;
@@ -251,11 +249,14 @@ Navegador
 - `infra/compose.yaml`: referência local portável com Redis e MinIO;
 - Python permanece como baseline de paridade durante a migração.
 
-Não há banco relacional. Resultados financeiros existem somente no cache temporário.
+PostgreSQL persiste identidade, acessos, configuração, workflow, resultados, evidências e auditoria. Redis não é fonte de verdade para autorização.
 
 ## 9. Segurança e privacidade
 
 - HTTPS obrigatório fora do desenvolvimento;
+- access JWT somente em memória e refresh token somente em cookie `HttpOnly`, `SameSite=Lax` e `Secure` em produção;
+- rotação de refresh com detecção de reutilização e revogação da família;
+- validação de origem nas operações autenticadas por cookie;
 - CORS para a própria origem, CSP, `nosniff`, política de referência e proteção de frame;
 - `robots.txt` e metadado `noindex, nofollow`;
 - bucket privado e chaves aleatórias;
@@ -271,17 +272,17 @@ Não há banco relacional. Resultados financeiros existem somente no cache tempo
 
 ## 10. Critérios de aceite
 
-1. Um visitante conclui o fluxo sem login e sem terminal.
-2. O token tem 256 bits, fica em `sessionStorage`, é persistido apenas por hash e não aparece em URL/log.
-3. Um token não acessa outra sessão e não existe listagem.
+1. Um usuário autenticado conclui o fluxo sem terminal e somente nas empresas autorizadas.
+2. O access JWT fica apenas em memória; o refresh opaco fica em cookie `HttpOnly` e somente seu hash é persistido.
+3. Um usuário não acessa empresa ou execução sem membership e papel adequados.
 4. O fluxo exige um razão, de um a cinco extratos e a tolerância monetária.
 5. Todos os extratos de conta corrente enviados são incluídos na comparação com o razão da empresa confirmada.
 6. Razão com múltiplas empresas é bloqueado; múltiplas competências exigem escolha.
 7. Layout desconhecido, macro, assinatura falsa, ZIP bomb e PDF excedente são rejeitados sem resíduos.
 8. A fila limita 20 aguardando e o worker limita dois jobs concorrentes por padrão.
 9. A tela e o XLSX usam o mesmo resultado; o XLSX contém oito abas e neutraliza fórmulas.
-10. Fechamento, cancelamento, cinco minutos sem heartbeat e duas horas absolutas eliminam todos os dados financeiros.
-11. A telemetria contém apenas eventos técnicos anônimos.
+10. Conclusão, falha e cancelamento eliminam uploads; resultados e evidências são eliminados após um ano.
+11. A telemetria contém apenas eventos técnicos sem credenciais ou conteúdo financeiro.
 12. O baseline 2025-12 mantém 2.056 registros do razão, 1.723 do extrato, diferença de R$ 0,02 e 562 conciliações um-para-um, salvo mudança formalmente justificada.
 
 ## 11. Estratégia de testes

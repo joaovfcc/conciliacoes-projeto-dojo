@@ -3,11 +3,13 @@
  * Family: SOFISA_NET_POSICAO
  */
 
-import { parseMoney, money } from "../normalization.js"
+import { parseDate, parseMoney, money } from "../normalization.js"
 import type { StatementSourceAdapter, ExtractedStatementSource, CanonicalStatementDocument, StatementSourceDetection, StatementSourceValidation, CanonicalInvestmentEntry } from "../statement-sources.js"
 import { createSourceProvenance } from "../statement-sources.js"
 
-const POSITIVE_SIGNATURES = ["POSICAO DE INVESTIMENTOS"]
+const BANK_SIGNATURES = ["BANCO SOFISA", "NET.SOFISA.COM.BR"]
+const GENERIC_LAYOUT_SIGNATURES = ["POSICAO DE INVESTIMENTOS"]
+const SOFISA_LAYOUT_SIGNATURES = ["CONSULTA DE POSICAO - RENDA FIXA"]
 const NEGATIVE_SIGNATURES: string[] = []
 const BANK_CODE = "633"
 
@@ -22,13 +24,18 @@ export const sofisaPositionAdapter: StatementSourceAdapter<"PDF"> = {
   detect(source: ExtractedStatementSource & { format: "PDF" }): StatementSourceDetection {
     const allText = (source.pages ?? []).map((p) => p.text).join("\n")
     const upper = normalizeAscii(allText).toUpperCase()
-    const positiveMatches = POSITIVE_SIGNATURES.filter((sig) => upper.includes(sig))
+    const bankMatches = BANK_SIGNATURES.filter((sig) => upper.includes(sig))
+    const genericLayoutMatches = GENERIC_LAYOUT_SIGNATURES.filter((sig) => upper.includes(sig))
+    const sofisaLayoutMatches = SOFISA_LAYOUT_SIGNATURES.filter((sig) => upper.includes(sig))
     const negativeMatches = NEGATIVE_SIGNATURES.filter((sig) => upper.includes(sig))
-    const matched = positiveMatches.length === POSITIVE_SIGNATURES.length && negativeMatches.length === 0
+    const matched = (
+      sofisaLayoutMatches.length > 0
+      || (bankMatches.length > 0 && genericLayoutMatches.length > 0)
+    ) && negativeMatches.length === 0
     return {
       matched,
-      score: matched ? 100 : positiveMatches.length * 20,
-      evidenceCodes: positiveMatches.map((sig) => `SIGNATURE:${sig}`),
+      score: matched ? 100 : (bankMatches.length + genericLayoutMatches.length + sofisaLayoutMatches.length) * 20,
+      evidenceCodes: [...bankMatches, ...genericLayoutMatches, ...sofisaLayoutMatches].map((sig) => `SIGNATURE:${sig}`),
     }
   },
 
@@ -41,6 +48,7 @@ export const sofisaPositionAdapter: StatementSourceAdapter<"PDF"> = {
     const agency = identityMatch?.[1]?.replace(/\D/g, "") ?? ""
     const account = identityMatch?.[2]?.replace(/\D/g, "") ?? ""
     const finalBalanceMatch = /VALOR\s+LIQUIDO\s+TOTAL\s+R\$\s*([\d.]+,\d{2})/i.exec(normalizeAscii(allText))
+    const positionDate = extractPositionDate(normalizeAscii(allText))
 
     const investments: CanonicalInvestmentEntry[] = []
     let txIndex = 0
@@ -49,18 +57,23 @@ export const sofisaPositionAdapter: StatementSourceAdapter<"PDF"> = {
       const lines = splitLines(page.text)
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index]!
-        const match = /^CDB\s.*?([\d.]+,\d{2})$/.exec(line)
-        if (!match) continue
+        if (!/^CDB\b/i.test(line)) continue
 
-        const amountStr = match[1]!
+        const monetaryAmounts = [...line.matchAll(/R\$\s*([\d.]+,\d{2})/gi)]
+        const fallbackMatch = /^CDB\s.*?([\d.]+,\d{2})$/.exec(line)
+        const amountStr = monetaryAmounts.length >= 2 ? monetaryAmounts[1]?.[1] : fallbackMatch?.[1]
+        if (!amountStr) continue
+
         if (isZero(amountStr)) continue
+
+        const description = line.split(/\s+R\$/i)[0]?.trim() || "CDB"
 
         txIndex++
         investments.push({
           investmentId: `inv-${txIndex}`,
           amount: money(parseMoney(amountStr)),
           kind: "POSITION",
-          description: "CDB",
+          description,
           provenance: createSourceProvenance({
             sourceId: source.sourceId,
             format: "PDF",
@@ -88,6 +101,7 @@ export const sofisaPositionAdapter: StatementSourceAdapter<"PDF"> = {
         ...(agency ? { agency: { raw: agency, normalized: agency } } : {}),
         ...(account ? { account: { raw: account, normalized: account } } : {}),
       },
+      ...(positionDate ? { period: { start: positionDate, end: positionDate } } : {}),
       ...(finalBalanceMatch ? { closingBalance: finalBalanceMatch[1]! } : {}),
       transactions: [],
       investments,
@@ -130,4 +144,9 @@ function splitLines(text: string): string[] {
 
 function isZero(value: string): boolean {
   return parseMoney(value).isZero()
+}
+
+function extractPositionDate(text: string): string | undefined {
+  const match = /(?:CONSULTA\s+DE\s+POSICAO\s*-\s*RENDA\s+FIXA|POSICAO\s+DE\s+INVESTIMENTOS(?:\s+EM)?)\s*\(?(\d{2}\/\d{2}\/\d{4})\)?/i.exec(text)
+  return match?.[1] ? parseDate(match[1]) : undefined
 }

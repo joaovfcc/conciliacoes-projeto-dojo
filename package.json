@@ -30,8 +30,8 @@
     "docker:logs": "docker compose logs -f",
     "docker:ps": "docker compose ps",
     "db:logs": "docker compose logs -f postgres",
-    "db:migrate": "pnpm --filter @conciliacao/core exec prisma migrate deploy --schema prisma/schema.prisma",
-    "db:seed": "pnpm --filter @conciliacao/core auth:bootstrap-owner"
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "db:seed": "node scripts/db-seed.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

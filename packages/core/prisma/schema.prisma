@@ -12,6 +12,22 @@ enum ActiveStatus {
   INACTIVE
 }
 
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum OrganizationRole {
+  OWNER
+}
+
+enum CompanyAccessRole {
+  PREPARER
+  REVIEWER
+  ADMIN
+  AUDITOR
+}
+
 enum AccountType {
   CHECKING
   SAVINGS
@@ -54,8 +70,72 @@ enum ExceptionStatus {
   REJECTED
 }
 
+enum ConfigProfileVersionStatus {
+  DRAFT
+  VALIDATING
+  READY
+  APPROVED
+  PUBLISHED
+  SUPERSEDED
+  INACTIVE
+}
+
+enum ConfigImportMappingSource {
+  BANK
+  LEDGER
+}
+
+enum ConfigRoutingMatch {
+  ALL
+  ANY
+}
+
+enum ConfigInheritanceLevel {
+  ORGANIZATION
+  LEGAL_ENTITY
+  PROFILE
+  PROFILE_VERSION
+}
+
+enum ConfigEffectiveInheritanceLevel {
+  GLOBAL
+  BANK_LAYOUT
+  LEGAL_ENTITY
+  PROFILE
+  PROFILE_VERSION
+}
+
+enum ConfigSimulationStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  TIMED_OUT
+  CANCELLED
+  BLOCKED
+}
+
+enum ConfigRunMode {
+  DRAFT
+  SIMULATION
+  OFFICIAL
+}
+
+enum ConfigRunStatus {
+  PREPARED
+  PENDING
+  RUNNING
+  SUCCEEDED
+  BLOCKED
+  FAILED
+  TIMED_OUT
+  CANCELLED
+}
+
 model Company {
   id              String       @id @default(uuid())
+  organizationId  String
+  legalEntityId   String
   name            String
   documentNumber  String?
   status          ActiveStatus @default(ACTIVE)
@@ -71,25 +151,99 @@ model Company {
   importBatches          ImportBatch[]
   reconciliationPeriods ReconciliationPeriod[]
   reconciliationRuns    ReconciliationRun[]
+  completedReconciliations CompletedReconciliation[]
   companyAccesses        CompanyAccess[]
   transactions           NormalizedTransaction[]
   ledgerEntries          NormalizedLedgerEntry[]
+  legalEntity            ConfigLegalEntity @relation(fields: [organizationId, legalEntityId], references: [organizationId, id], onDelete: Restrict)
 
   @@index([documentNumber])
+  @@unique([organizationId, id])
+  @@unique([organizationId, legalEntityId])
 }
 
 model CompanyAccess {
   id        String   @id @default(uuid())
   companyId String
-  actorId   String
-  roles     String[]
+  userId    String
+  roles     CompanyAccessRole[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([companyId, actorId])
-  @@index([actorId])
+  @@unique([companyId, userId])
+  @@index([userId])
+}
+
+model User {
+  id                     String       @id @default(uuid())
+  email                  String       @unique
+  passwordHash           String
+  status                 UserStatus   @default(ACTIVE)
+  passwordChangeRequired Boolean      @default(true)
+  authVersion            Int          @default(1)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  organizationMemberships OrganizationMembership[]
+  companyAccesses         CompanyAccess[]
+  authSessions            AuthSession[]
+  completedReconciliations CompletedReconciliation[]
+
+  @@index([status])
+}
+
+model OrganizationMembership {
+  id             String           @id @default(uuid())
+  organizationId String
+  userId         String
+  role           OrganizationRole
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model AuthSession {
+  id                String    @id @default(uuid())
+  userId            String
+  authVersion       Int
+  createdAt         DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+  revocationReason  String?
+
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens AuthRefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@index([idleExpiresAt])
+  @@index([absoluteExpiresAt])
+}
+
+model AuthRefreshToken {
+  id                String    @id @default(uuid())
+  sessionId         String
+  tokenHash         String    @unique
+  expiresAt         DateTime
+  createdAt         DateTime  @default(now())
+  consumedAt        DateTime?
+  revokedAt         DateTime?
+  replacedByTokenId String?   @unique
+
+  session     AuthSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  replacement AuthRefreshToken? @relation("RefreshRotation", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  previous    AuthRefreshToken? @relation("RefreshRotation")
+
+  @@index([sessionId, expiresAt])
 }
 
 model BankAccount {
@@ -521,6 +675,31 @@ model Evidence {
   @@index([reconciliationRunId])
 }
 
+model CompletedReconciliation {
+  id             String   @id
+  organizationId String
+  companyId      String
+  userId         String
+  status         String
+  period         String
+  confirmation   Json
+  sourceFiles    Json
+  result         Json
+  completedAt    DateTime
+  expiresAt      DateTime
+  processingAttemptId String?
+  processingGeneration Int?
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  company      Company            @relation(fields: [organizationId, companyId], references: [organizationId, id], onDelete: Restrict)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, completedAt])
+  @@index([companyId, completedAt])
+  @@index([userId, completedAt])
+  @@index([expiresAt])
+}
+
 model AuditEvent {
   id         String   @id @default(uuid())
   companyId  String?
@@ -535,4 +714,368 @@ model AuditEvent {
 
   @@index([entityType, entityId, occurredAt])
   @@index([companyId, occurredAt])
+}
+
+model ConfigOrganization {
+  id              String       @id
+  name            String
+  timezone        String
+  defaultCurrency String
+  status          ActiveStatus
+  createdAt       DateTime
+  updatedAt       DateTime
+
+  legalEntities         ConfigLegalEntity[]
+  bankDirectories       ConfigBankDirectory[]
+  banks                 ConfigBank[]
+  bankAccounts          ConfigBankAccount[]
+  ledgerAccounts        ConfigLedgerAccount[]
+  profiles              ConfigProfile[]
+  profileVersions       ConfigProfileVersion[]
+  accountMappings       ConfigAccountMapping[]
+  importMappingVersions ConfigImportMappingVersion[]
+  inheritanceNodes      ConfigInheritanceNode[]
+  inheritanceOverrides  ConfigInheritanceOverride[]
+  simulations           ConfigSimulation[]
+  wizardDrafts          ConfigWizardDraft[]
+  publishedSnapshots    ConfigPublishedSnapshot[]
+  runRecords            ConfigRunRecord[]
+  auditEvents           ConfigAuditEvent[]
+  memberships          OrganizationMembership[]
+  completedReconciliations CompletedReconciliation[]
+}
+
+model ConfigLegalEntity {
+  id             String
+  organizationId String
+  legalName      String
+  taxId          String
+  status         ActiveStatus
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  companies    Company[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, taxId])
+  @@index([organizationId, status])
+}
+
+model ConfigBankDirectory {
+  id             String
+  organizationId String
+  name           String
+  status         ActiveStatus
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, name])
+  @@index([organizationId, status])
+}
+
+model ConfigBank {
+  id             String
+  organizationId String
+  directoryId    String
+  code           String
+  name           String
+  status         ActiveStatus
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, directoryId, code])
+  @@index([organizationId, directoryId, status])
+}
+
+model ConfigBankAccount {
+  id                 String
+  organizationId     String
+  legalEntityId      String
+  bankId             String
+  agency             String
+  account            String
+  currency           String
+  accountType        AccountType
+  status             ActiveStatus
+  inactivationReason String?
+  inactivatedAt      DateTime?
+  effectiveFrom      DateTime     @db.Date
+  effectiveTo        DateTime?    @db.Date
+  createdAt          DateTime
+  updatedAt          DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, legalEntityId, bankId, agency, account, currency, effectiveFrom])
+  @@index([organizationId, legalEntityId, bankId, agency, account, currency, effectiveFrom, effectiveTo])
+  @@index([organizationId, status])
+}
+
+model ConfigLedgerAccount {
+  id             String
+  organizationId String
+  legalEntityId  String
+  code           String
+  name           String
+  currency       String
+  sourceSystem   String
+  status         ActiveStatus
+  effectiveFrom  DateTime     @db.Date
+  effectiveTo    DateTime?    @db.Date
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, legalEntityId, sourceSystem, code, effectiveFrom])
+  @@index([organizationId, legalEntityId, status])
+}
+
+model ConfigProfile {
+  id             String
+  organizationId String
+  legalEntityId  String
+  name           String
+  description    String?
+  status         ActiveStatus
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, legalEntityId, name])
+  @@index([organizationId, status])
+}
+
+model ConfigProfileVersion {
+  id               String
+  organizationId   String
+  profileId        String
+  version          Int
+  status           ConfigProfileVersionStatus
+  configuration    Json
+  sourceVersionId  String?
+  validationIssues String[]
+  effectiveFrom    DateTime                   @db.Date
+  effectiveTo      DateTime?                  @db.Date
+  createdAt        DateTime
+  createdBy        String
+  updatedAt        DateTime
+  approvedAt       DateTime?
+  approvedBy       String?
+  publishedAt      DateTime?
+  publishedBy      String?
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, profileId, version])
+  @@index([organizationId, profileId, status, effectiveFrom, effectiveTo])
+}
+
+model ConfigAccountMapping {
+  id               String
+  organizationId   String
+  profileVersionId String
+  bankAccountId    String
+  ledgerAccountId  String
+  priority         Int?
+  match            ConfigRoutingMatch?
+  conditions       Json?
+  fallback         Boolean?
+  status           ActiveStatus
+  effectiveFrom    DateTime            @db.Date
+  effectiveTo      DateTime?           @db.Date
+  createdAt        DateTime
+  updatedAt        DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, profileVersionId, bankAccountId, ledgerAccountId, effectiveFrom])
+  @@index([organizationId, profileVersionId, status])
+}
+
+model ConfigImportMappingVersion {
+  id               String
+  organizationId   String
+  profileVersionId String
+  source           ConfigImportMappingSource
+  version          Int
+  fieldMap         Json
+  status           ActiveStatus
+  publishedAt      DateTime?
+  publishedBy      String?
+  effectiveFrom    DateTime                  @db.Date
+  effectiveTo      DateTime?                 @db.Date
+  createdAt        DateTime
+  updatedAt        DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, profileVersionId, source, version])
+  @@index([organizationId, profileVersionId, status])
+}
+
+model ConfigInheritanceNode {
+  id             String
+  organizationId String
+  level          ConfigInheritanceLevel
+  hierarchyLevel ConfigEffectiveInheritanceLevel?
+  scopeId        String
+  parentNodeId   String?
+  sourceVersion  String?
+  values         Json
+  status         ActiveStatus
+  effectiveFrom  DateTime                         @db.Date
+  effectiveTo    DateTime?                        @db.Date
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, level, scopeId, effectiveFrom])
+  @@index([organizationId, parentNodeId])
+  @@index([organizationId, status])
+}
+
+model ConfigInheritanceOverride {
+  id             String
+  organizationId String
+  nodeId         String
+  key            String
+  value          Json
+  reason         String
+  createdAt      DateTime
+  createdBy      String
+  approvedAt     DateTime?
+  approvedBy     String?
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@index([organizationId, nodeId, createdAt])
+}
+
+model ConfigSimulation {
+  id                      String
+  organizationId          String
+  profileVersionId        String
+  bankAccountId           String
+  status                  ConfigSimulationStatus
+  result                  Json
+  reprocessOfSimulationId String?
+  createdAt               DateTime
+  createdBy               String
+  approvedAt              DateTime?
+  approvedBy              String?
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@index([organizationId, profileVersionId, bankAccountId, createdAt])
+  @@index([organizationId, reprocessOfSimulationId])
+}
+
+model ConfigWizardDraft {
+  id             String
+  organizationId String
+  actorId        String
+  profileId      String?
+  step           String
+  data           Json
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@index([organizationId, actorId, updatedAt])
+  @@index([organizationId, profileId])
+}
+
+model ConfigPublishedSnapshot {
+  id                String
+  organizationId    String
+  profileId         String
+  profileVersionId  String
+  bankAccountId     String
+  inheritanceNodeId String?
+  requestedEffectiveAt DateTime  @db.Date
+  effectiveFrom     DateTime  @db.Date
+  effectiveTo       DateTime? @db.Date
+  snapshot          Json
+  configurationHash String
+  createdAt         DateTime
+  createdBy         String
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, profileVersionId, bankAccountId, requestedEffectiveAt])
+  @@index([organizationId, profileVersionId, effectiveFrom, effectiveTo])
+  @@index([organizationId, configurationHash])
+}
+
+model ConfigRunRecord {
+  id                String
+  organizationId    String
+  profileId         String
+  profileVersionId  String
+  bankAccountId     String
+  snapshotId        String
+  mode              ConfigRunMode
+  idempotencyKey    String
+  fileHashes        String[]
+  fileNames         String[]
+  configurationHash String
+  snapshot          Json
+  request           Json
+  result            Json?
+  status            ConfigRunStatus
+  reprocessOfRunId  String?
+  createdAt         DateTime
+  createdBy         String
+  updatedAt         DateTime
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, configurationHash])
+  @@index([fileHashes], type: Gin)
+  @@index([organizationId, profileVersionId, createdAt])
+  @@index([organizationId, reprocessOfRunId])
+}
+
+model ConfigAuditEvent {
+  id             String
+  organizationId String
+  entityType     String
+  entityId       String
+  action         String
+  before         Json
+  after          Json
+  actor          String
+  at             DateTime
+  reason         String
+  correlationId  String
+
+  organization ConfigOrganization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, id])
+  @@index([organizationId, entityType, entityId, at])
+  @@index([organizationId, correlationId])
 }

@@ -2,7 +2,7 @@ import { normalizeHeader, parseDate, parseMoney } from "../normalization.js";
 import type { ExtractedTabularRow, ExtractedTabularSheet, TabularSourceFormat, TabularWarning } from "../tabular/tabular-types.js";
 import type { NormalizedBankTransaction, ParsedStatement, StatementLayoutProfile } from "./statement-types.js";
 
-type ColumnName = "date" | "description" | "document" | "amount" | "debit" | "credit" | "balance";
+type ColumnName = "date" | "description" | "descriptionComplement" | "document" | "amount" | "debit" | "credit" | "balance";
 
 function aliasMatches(header: string, alias: string): boolean {
   const normalizedHeader = normalizeHeader(header);
@@ -15,13 +15,24 @@ function aliasMatches(header: string, alias: string): boolean {
 
 function mapColumns(row: ExtractedTabularRow, profile: StatementLayoutProfile): Map<ColumnName, number> {
   const mapping = new Map<ColumnName, number>();
+  const usedColumns = new Set<number>();
   const definitions: Array<[ColumnName, string[] | undefined]> = [
-    ["date", profile.columns.date], ["description", profile.columns.description], ["document", profile.columns.document],
+    ["date", profile.columns.date], ["description", profile.columns.description], ["descriptionComplement", profile.columns.descriptionComplement], ["document", profile.columns.document],
     ["amount", profile.columns.amount], ["debit", profile.columns.debit], ["credit", profile.columns.credit], ["balance", profile.columns.balance],
   ];
-  for (const cell of row.cells) {
-    const roles = definitions.filter(([, aliases]) => aliases?.some((alias) => aliasMatches(cell.displayValue, alias)));
-    if (roles.length === 1) mapping.set(roles[0]![0], cell.columnIndex);
+  for (const [role, aliases] of definitions) {
+    for (const alias of aliases ?? []) {
+      const candidates = row.cells.filter((candidate) =>
+        !usedColumns.has(candidate.columnIndex) && aliasMatches(candidate.displayValue, alias)
+      );
+      const exactCandidates = candidates.filter((candidate) => normalizeHeader(candidate.displayValue) === normalizeHeader(alias));
+      const selectable = exactCandidates.length > 0 ? exactCandidates : candidates;
+      if (selectable.length !== 1) continue;
+      const cell = selectable[0]!;
+      mapping.set(role, cell.columnIndex);
+      usedColumns.add(cell.columnIndex);
+      break;
+    }
   }
   return mapping;
 }
@@ -62,18 +73,42 @@ export function parseStatement(
     return index === undefined ? undefined : row.cells.find((candidate) => candidate.columnIndex === index)?.displayValue;
   };
   let lastDate = "";
+  let openingBalance: number | undefined;
+  let closingBalance: number | undefined;
 
   for (const row of sheet.rows.slice(headerRowIndex + 1)) {
     if (exactStructuralPattern(row, profile.rules.stopPatterns)) break;
-    if (exactStructuralPattern(row, profile.rules.ignoreRowPatterns)) continue;
     if (row.cells.every((candidate) => !candidate.displayValue.trim())) continue;
 
     let rawDate = cell(row, "date");
-    const description = cell(row, "description")?.trim() ?? "";
+    const description = [...new Set([
+      cell(row, "description")?.trim(),
+      cell(row, "descriptionComplement")?.trim(),
+    ].filter((value): value is string => Boolean(value)))].join(" - ");
     const rawAmount = cell(row, "amount");
     const rawDebit = cell(row, "debit");
     const rawCredit = cell(row, "credit");
     const rawBalance = cell(row, "balance");
+    const normalizedDescription = normalizeHeader(description);
+    const isOpeningBalance = profile.rules.openingBalancePatterns?.some(
+      (pattern) => normalizedDescription.startsWith(normalizeHeader(pattern)),
+    ) ?? false;
+    const isClosingBalance = profile.rules.closingBalancePatterns?.some(
+      (pattern) => normalizedDescription.startsWith(normalizeHeader(pattern)),
+    ) ?? false;
+    if (isOpeningBalance || isClosingBalance) {
+      if (rawBalance?.trim()) {
+        try {
+          const balance = parseMoney(rawBalance).toNumber();
+          if (isOpeningBalance && openingBalance === undefined) openingBalance = balance;
+          if (isClosingBalance) closingBalance = balance;
+        } catch {
+          warnings.push({ code: "INVALID_BALANCE", message: "Saldo estrutural não pôde ser interpretado.", sheetName: sheet.name, rowNumber: row.rowNumber });
+        }
+      }
+      continue;
+    }
+    if (exactStructuralPattern(row, profile.rules.ignoreRowPatterns)) continue;
     if (!rawDate && profile.rules.inheritDateFromPreviousRow && lastDate && description && !rawAmount && !rawDebit && !rawCredit) {
       const previous = transactions.at(-1);
       if (previous) previous.description = `${previous.description} ${description}`.trim();
@@ -124,5 +159,14 @@ export function parseStatement(
       warnings: [],
     });
   }
-  return { transactions, warnings, metadata: { ...(agency ? { agency } : {}), ...(account ? { account } : {}) } };
+  return {
+    transactions,
+    warnings,
+    metadata: {
+      ...(agency ? { agency } : {}),
+      ...(account ? { account } : {}),
+      ...(openingBalance !== undefined ? { openingBalance } : {}),
+      ...(closingBalance !== undefined ? { closingBalance } : {}),
+    },
+  };
 }

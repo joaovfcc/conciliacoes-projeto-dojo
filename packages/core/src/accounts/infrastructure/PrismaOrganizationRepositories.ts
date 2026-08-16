@@ -28,6 +28,8 @@ export class PrismaCompanyRepository implements CompanyRepository {
 
   private map(record: {
     id: string;
+    organizationId: string;
+    legalEntityId: string;
     name: string;
     documentNumber: string | null;
     status: "ACTIVE" | "INACTIVE";
@@ -36,6 +38,8 @@ export class PrismaCompanyRepository implements CompanyRepository {
   }): Company {
     return {
       id: record.id,
+      organizationId: record.organizationId,
+      legalEntityId: record.legalEntityId,
       name: record.name,
       ...(record.documentNumber ? { documentNumber: record.documentNumber } : {}),
       status: record.status,

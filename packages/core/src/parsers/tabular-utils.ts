@@ -15,6 +15,7 @@ export const aliases: Record<string, string[]> = {
   CREDIT: ["CREDITO", "VALOR_CREDITO"],
   VALUE: ["VALOR", "VALOR_LIQUIDO", "TRNAMT"],
   SOURCE_ID: ["IDENTIFICADOR", "ID", "ID_PROTHEUS", "LOTE_SUB_DOC_LINHA", "FITID", "ID_BANCARIO"],
+  BALANCE: ["SALDO", "SALDO_ATUAL", "SALDO_APOS_LANCAMENTO"],
 };
 
 export const aliasLookup = new Map(

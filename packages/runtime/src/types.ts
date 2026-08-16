@@ -28,6 +28,9 @@ export type ReconciliationSession = {
   id: string;
   tokenHash: string;
   clientKey: string;
+  actorId: string;
+  organizationId: string;
+  companyId: string;
   createdAt: string;
   expiresAt: string;
   lastHeartbeatAt: string;
@@ -41,6 +44,9 @@ export type ReconciliationSession = {
   statements?: StatementRecord[];
   investments?: InvestmentEntry[];
   confirmation?: ConfirmProcessingRequest;
+  confirmationHash?: string;
+  processingAttemptId?: string;
+  processingGeneration?: number;
   result?: ProcessingResult;
   errorCode?: string;
   errorMessage?: string;
@@ -49,7 +55,7 @@ export type ReconciliationSession = {
 
 export type PublicSession = Omit<
   ReconciliationSession,
-  "tokenHash" | "clientKey" | "ledgers" | "statements" | "investments" | "confirmation"
+  "tokenHash" | "clientKey" | "actorId" | "organizationId" | "ledgers" | "statements" | "investments" | "confirmation" | "confirmationHash" | "processingAttemptId" | "processingGeneration"
 >;
 
 export type CreateSessionResult = {

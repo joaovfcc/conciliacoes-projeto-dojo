@@ -11,11 +11,11 @@ import { requireV2Actor, v2RouteError } from "../../../../../../lib/v2-auth";
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    requireV2Actor(request);
+    await requireV2Actor(request);
     const runs = new PrismaReconciliationRunRepository(prisma);
     const run = await runs.findById(id);
     if (!run) return Response.json({ error: { code: "NOT_FOUND", message: "Conciliação não encontrada" } }, { status: 404 });
-    requireV2Actor(request, run.companyId);
+    await requireV2Actor(request, run.companyId);
     const [evidences, audit] = await Promise.all([
       new PrismaEvidenceRepository(prisma).listByRun(id),
       new PrismaAuditRepository(prisma).list("RECONCILIATION_RUN", id),

@@ -1,4 +1,6 @@
 import type {
+  BalanceCheck,
+  BalanceMovementEffect,
   PreflightResult,
   LedgerRecord,
   StatementRecord,
@@ -34,4 +36,8 @@ export type LedgerFileMetadata = {
   bank: string;
   agency: string;
   bankAccount: string;
+  openingBalance?: string;
+  closingBalance?: string;
+  balanceCheck?: BalanceCheck;
+  balanceMovementEffect?: BalanceMovementEffect;
 };

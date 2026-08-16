@@ -27,6 +27,20 @@ jobs:
       - run: pnpm test:parity
       - run: pnpm build
 
+  infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:infrastructure
+
   legacy-python:
     runs-on: windows-latest
     steps:

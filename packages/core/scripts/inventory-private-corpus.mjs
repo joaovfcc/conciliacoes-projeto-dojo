@@ -3,7 +3,7 @@ import { dirname, isAbsolute } from "node:path";
 
 import yauzl from "yauzl";
 
-import { StatementParseError, preflightFiles } from "../dist/src/files.js";
+import { StatementParseError, preflightFiles } from "../dist/src/index.js";
 import {
   createPrivateCorpusRecord,
   institutionHintFromOriginalName,

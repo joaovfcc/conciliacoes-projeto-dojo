@@ -15,6 +15,21 @@ export interface ParseSpreadsheetInput {
   limits?: Partial<TabularLimits>;
 }
 
+function physicalWorksheetRange(worksheet: XLSX.WorkSheet): XLSX.Range | undefined {
+  let maximumRow = -1;
+  let maximumColumn = -1;
+
+  for (const address of Object.keys(worksheet)) {
+    if (!/^[A-Z]{1,3}[1-9]\d*$/i.test(address)) continue;
+    const cell = XLSX.utils.decode_cell(address);
+    maximumRow = Math.max(maximumRow, cell.r);
+    maximumColumn = Math.max(maximumColumn, cell.c);
+  }
+
+  if (maximumRow < 0 || maximumColumn < 0) return undefined;
+  return { s: { r: 0, c: 0 }, e: { r: maximumRow, c: maximumColumn } };
+}
+
 export function parseSpreadsheet(input: ParseSpreadsheetInput): ExtractedTabularDocument {
   const limits = { ...DEFAULT_TABULAR_LIMITS, ...input.limits };
 
@@ -51,6 +66,7 @@ export function parseSpreadsheet(input: ParseSpreadsheetInput): ExtractedTabular
   const sheets: ExtractedTabularSheet[] = [];
   let totalRows = 0;
   let totalCells = 0;
+  let materializedCells = 0;
   let hasFormulas = false;
 
   for (let i = 0; i < workbook.SheetNames.length; i++) {
@@ -67,33 +83,63 @@ export function parseSpreadsheet(input: ParseSpreadsheetInput): ExtractedTabular
        }
     }
 
+    const physicalRange = physicalWorksheetRange(worksheet);
+    if (!physicalRange) continue;
+
+    const physicalReference = XLSX.utils.encode_range(physicalRange);
+    if (worksheet["!ref"] !== physicalReference) {
+      warnings.push({
+        code: "WORKSHEET_RANGE_REPAIRED",
+        message: `Sheet '${sheetName}' declared range '${worksheet["!ref"] ?? "none"}' but contains cells through '${physicalReference}'.`,
+        sheetName,
+      });
+    }
+
+    const effectiveRange: XLSX.Range = {
+      s: physicalRange.s,
+      e: {
+        r: Math.min(physicalRange.e.r, limits.maxRowsPerSheet - 1),
+        c: Math.min(physicalRange.e.c, limits.maxColumnsPerSheet - 1),
+      },
+    };
+    if (physicalRange.e.r >= limits.maxRowsPerSheet) {
+      warnings.push({
+        code: "ROW_LIMIT_EXCEEDED",
+        message: `Sheet '${sheetName}' exceeded ${limits.maxRowsPerSheet} rows and was truncated.`,
+        sheetName,
+      });
+    }
+    if (physicalRange.e.c >= limits.maxColumnsPerSheet) {
+      warnings.push({
+        code: "COLUMN_LIMIT_EXCEEDED",
+        message: `Sheet '${sheetName}' exceeded ${limits.maxColumnsPerSheet} columns and was truncated.`,
+        sheetName,
+      });
+    }
+
+    const rangeCells = (effectiveRange.e.r + 1) * (effectiveRange.e.c + 1);
+    materializedCells += rangeCells;
+    if (materializedCells > limits.maxCells) {
+      throw new TabularError("CELL_LIMIT_EXCEEDED", `The workbook exceeds the limit of ${limits.maxCells} materialized cells.`);
+    }
+
     const matrix = XLSX.utils.sheet_to_json<any[]>(worksheet, {
       header: 1,
       raw: false,
       defval: "",
-      blankrows: false,
+      blankrows: true,
+      range: XLSX.utils.encode_range(effectiveRange),
     });
 
     if (matrix.length === 0) {
       continue; // Skip entirely empty sheets
     }
 
-    if (matrix.length > limits.maxRowsPerSheet) {
-      warnings.push({
-        code: "ROW_LIMIT_EXCEEDED",
-        message: `Sheet '${sheetName}' exceeded ${limits.maxRowsPerSheet} rows and was truncated.`,
-        ...(sheetName ? { sheetName } : {})
-      });
-      matrix.splice(limits.maxRowsPerSheet);
-    }
-
     const extractedRows: ExtractedTabularRow[] = [];
-    // We must track the actual row index based on the spreadsheet (which might have skipped empty lines)
-    // But sheet_to_json with blankrows:false skips empty lines in the output, so rowNumber isn't perfectly mapped to Excel row.
-    // However, it's consistent. If we want exact Excel rows, we should use blankrows: true, but we'll stick to false for simplicity.
     for (let r = 0; r < matrix.length; r++) {
       const rowData = matrix[r];
       if (!Array.isArray(rowData)) continue;
+      if (rowData.every((value) => String(value ?? "").trim() === "")) continue;
 
       if (rowData.length > limits.maxColumnsPerSheet) {
         rowData.splice(limits.maxColumnsPerSheet);
@@ -115,7 +161,7 @@ export function parseSpreadsheet(input: ParseSpreadsheetInput): ExtractedTabular
       });
 
       extractedRows.push({
-        rowNumber: r + 1, // 1-indexed
+        rowNumber: effectiveRange.s.r + r + 1,
         cells
       });
       totalCells += cells.length;

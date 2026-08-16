@@ -19,7 +19,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return Response.json({ error: "Reconciliation Run not found" }, { status: 404 });
     }
 
-    const actor = requireV2Actor(request, run.companyId);
+    const actor = await requireV2Actor(request, run.companyId);
     const updated = await new WorkflowService(runRepo, new PrismaAuditRepository(prisma)).transition(
       id,
       data.action,

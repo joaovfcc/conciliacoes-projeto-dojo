@@ -7,9 +7,16 @@ import {
 import type { TransactionRepository } from "../../shared/domain/TransactionRepository.js";
 import type { LedgerRepository } from "../../shared/domain/LedgerRepository.js";
 import type { ReconciliationRunRepository } from "../domain/ReconciliationRunRepository.js";
-import type { ReconciliationRun, MatchGroup, ReconciliationException, ExceptionType } from "../domain/ReconciliationRun.js";
+import {
+  isEffectiveReconciliation,
+  type ReconciliationRun,
+  type MatchGroup,
+  type ReconciliationException,
+  type ExceptionType,
+} from "../domain/ReconciliationRun.js";
 import { randomUUID } from "node:crypto";
 import type Decimal from "decimal.js";
+import { decimalString } from "../../shared/domain/Decimal.js";
 import type { Evidence, EvidenceRepository } from "../../shared/domain/Evidence.js";
 import type { AuditRepository } from "../../audit/domain/AuditEvent.js";
 import type { ReconciliationConfigurationRepository } from "../domain/ReconciliationConfigurationRepository.js";
@@ -95,7 +102,7 @@ export class ReconcileTransactionsUseCase {
       const evidenceId = `${runId}:${result.id}`;
       let matchGroupId: string | undefined;
       let exceptionId: string | undefined;
-      if (result.status.startsWith("AUTO_MATCH_") || result.status === "GROUP_SUGGESTION") {
+      if (result.status.startsWith("AUTO_MATCH_") || result.status === "BANK_NET_ZERO" || result.status === "GROUP_SUGGESTION") {
         const resultLedgers = result.ledgers ?? (result.ledger ? [result.ledger] : []);
         const resultStatements = result.statements ?? (result.statement ? [result.statement] : []);
         matchGroupId = `${runId}:${result.id}`;
@@ -110,7 +117,7 @@ export class ReconcileTransactionsUseCase {
           ...(result.evidence.dateDifferenceDays !== undefined
             ? { dateDifferenceDays: result.evidence.dateDifferenceDays }
             : {}),
-          amountDifference: result.evidence.amountDifference,
+          amountDifference: decimalString(result.evidence.amountDifference),
           ...(result.evidence.descriptionSimilarity !== undefined
             ? { descriptionSimilarity: result.evidence.descriptionSimilarity }
             : {}),
@@ -119,7 +126,7 @@ export class ReconcileTransactionsUseCase {
         });
       }
 
-      if (!result.status.startsWith("AUTO_MATCH_")) {
+      if (!isTerminalAutomaticStatus(result.status)) {
         exceptionId = randomUUID();
         exceptions.push({
           id: exceptionId,
@@ -185,7 +192,9 @@ export class ReconcileTransactionsUseCase {
       actorId: input.preparerId,
       occurredAt: now,
       metadata: {
-        automaticMatches: matchGroups.filter((group) => group.status === "AUTO_CONFIRMED").length,
+        automaticMatches: matchGroups.filter(
+          (group) => group.status === "AUTO_CONFIRMED" && isEffectiveReconciliation(group),
+        ).length,
         suggestions: matchGroups.filter((group) => group.status === "SUGGESTED").length,
         exceptions: exceptions.length,
       },
@@ -206,6 +215,10 @@ export class ReconcileTransactionsUseCase {
       default: return "SOURCE_ERROR";
     }
   }
+}
+
+function isTerminalAutomaticStatus(status: MatchStatus): boolean {
+  return status.startsWith("AUTO_MATCH_") || status === "BANK_NET_ZERO" || status === "AUTO_APPLICATION_EXCLUDED";
 }
 
 export class ReconciliationConfigurationError extends Error {

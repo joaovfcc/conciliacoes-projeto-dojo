@@ -21,8 +21,9 @@ export const ITAU_CHECKING_XLSX_V1: StatementLayoutProfile = {
 
   columns: {
     date: ["data", "data de lançamento"],
-    description: ["lançamento", "histórico", "descrição", "razão social"],
-    document: ["documento", "ag/origem", "cpf/cnpj"],
+    description: ["lançamento", "histórico", "descrição"],
+    descriptionComplement: ["razão social"],
+    document: ["documento", "cpf/cnpj", "ag/origem"],
     amount: ["valor (r$)", "valor"],
     balance: ["saldo (r$)", "saldo"],
   },
@@ -34,5 +35,8 @@ export const ITAU_CHECKING_XLSX_V1: StatementLayoutProfile = {
     repeatedHeaderPolicy: "IGNORE",
     ignoreRowPatterns: ["saldo anterior", "saldo atual", "posição consolidada", "saldo final", "resumo"],
     stopPatterns: ["não há lançamentos", "fim do extrato"],
+    openingBalancePatterns: ["saldo anterior"],
+    closingBalancePatterns: ["saldo total", "saldo final"],
+    balanceExclusionPatterns: ["^(APL|RES) APLIC AUT"],
   },
 };

@@ -46,6 +46,21 @@ describe("parsers PDF bancários", () => {
     expect(result.preflight.issues).toContainEqual(expect.objectContaining({ severity: "ERROR", code: "BALANCE_INTEGRITY_FAILED" }));
   });
 
+  it("aplica a validação do adapter selecionado antes de liberar o pré-processamento", async () => {
+    const result = await parse([
+      "Internet Banking - BMG",
+      "EXTRATO DA CONTA",
+      "R$ 10.00 Saldo Total (em 12/25):",
+      "01/12/2025 RECEBIMENTO PIX Credito R$ 10.00",
+      "31/12/2025 R$ 10.00",
+    ], "bmg-sem-identidade.pdf");
+
+    expect(result.preflight.issues).toContainEqual(expect.objectContaining({
+      severity: "ERROR",
+      code: "BANK_IDENTITY_MISSING",
+    }));
+  });
+
   it("não classifica Safra como Itaú apenas por mencionar aplicação automática", async () => {
     await expect(parse(["Banco Safra", "Extrato de movimentação", "Período 01/12/2025 a 31/12/2025", "Aplicação automática"], "safra.pdf")).rejects.toMatchObject({ code: "PDF_LAYOUT_UNSUPPORTED" });
   });

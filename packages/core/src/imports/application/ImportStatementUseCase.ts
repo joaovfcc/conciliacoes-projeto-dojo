@@ -18,6 +18,10 @@ import { InMemoryAuditRepository } from "../../audit/infrastructure/InMemoryAudi
 import { InMemoryEvidenceRepository } from "../../shared/infrastructure/InMemoryEvidenceRepository.js";
 import { ITAU_CHECKING_XLSX_V1 } from "../../statements/profiles/itau-checking-xlsx-v1.js";
 import { GENERIC_STATEMENT_V1 } from "../../statements/profiles/generic-statement-v1.js";
+import { BRADESCO_CHECKING_XLSX_V1 } from "../../statements/profiles/bradesco-checking-xlsx-v1.js";
+import { BB_CHECKING_XLSX_V1 } from "../../statements/profiles/bb-checking-xlsx-v1.js";
+import { SANTANDER_CHECKING_XLSX_V1 } from "../../statements/profiles/santander-checking-xlsx-v1.js";
+import { CAIXA_CHECKING_XLSX_V1 } from "../../statements/profiles/caixa-checking-xlsx-v1.js";
 import type { BankAccountRepository } from "../../accounts/domain/AccountRepositories.js";
 
 export interface ImportStatementInput {
@@ -103,7 +107,7 @@ export class ImportStatementUseCase {
     };
 
     try {
-      let profiles = [ITAU_CHECKING_XLSX_V1, GENERIC_STATEMENT_V1];
+      let profiles = [ITAU_CHECKING_XLSX_V1, BRADESCO_CHECKING_XLSX_V1, BB_CHECKING_XLSX_V1, SANTANDER_CHECKING_XLSX_V1, CAIXA_CHECKING_XLSX_V1, GENERIC_STATEMENT_V1];
       if (this.layoutRepo) {
         const accountLayouts = await this.layoutRepo.findActiveForAccount?.(input.accountId) ?? [];
         const stored = accountLayouts.length > 0

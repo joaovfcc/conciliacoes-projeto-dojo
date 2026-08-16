@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "../../packages/core/node_modules/exceljs";
 import { afterEach, describe, expect, it } from "vitest";
+import { InMemoryCompletedReconciliationRepository } from "../../packages/core/src/index";
 import { loadRuntimeConfig } from "../../packages/runtime/src/config";
 import { LocalObjectStore } from "../../packages/runtime/src/object-store";
 import { MemorySessionStore } from "../../packages/runtime/src/session-store";
@@ -18,8 +19,9 @@ describe("sessão de conciliação", () => {
     const config = { ...loadRuntimeConfig({}), localStoragePath: storagePath };
     const sessions = new MemorySessionStore(config);
     const objects = new LocalObjectStore(config);
-    const runtime = new RuntimeServices(config, sessions, objects);
-    const created = await sessions.create("e2e-client");
+    const completed = new InMemoryCompletedReconciliationRepository();
+    const runtime = new RuntimeServices(config, sessions, objects, completed);
+    const created = await sessions.create("e2e-client", "e2e-user", "e2e-org", "e2e-company");
     const session = (await sessions.authorize(created.session.id, created.token))!;
     const ledger = await ledgerWorkbook();
     const statement = ofxStatement();
@@ -42,7 +44,12 @@ describe("sessão de conciliação", () => {
       idempotencyKey: "e2e-session",
     });
 
-    expect(session.result?.results).toContainEqual(expect.objectContaining({ status: "AUTO_MATCH_VALUE_DATE", decisionLevel: "AUTOMATIC" }));
+    expect(session.result?.results).toContainEqual(expect.objectContaining({ status: "AUTO_MATCH_EXACT", decisionLevel: "AUTOMATIC" }));
+    expect(await completed.findById(session.id, ["e2e-company"], new Date())).toMatchObject({
+      organizationId: "e2e-org",
+      companyId: "e2e-company",
+      userId: "e2e-user",
+    });
     await expect(runtime.export(session)).resolves.toMatchObject({ length: expect.any(Number) });
   });
 });
@@ -52,7 +59,7 @@ async function ledgerWorkbook(): Promise<Buffer> {
   const sheet = workbook.addWorksheet("Razão");
   sheet.addRow(["CONTA - 1.1.1.0.2027 - BANCO ITAU AG. 8363 C/C00378-4"]);
   sheet.addRow(["EMPRESA", "FILIAL", "CONTA", "DATA", "DOCUMENTO", "HISTORICO", "VALOR"]);
-  sheet.addRow(["EMPRESA", "01", "11102027", "2026-01-02", "1", "PAGAMENTO", "10.00"]);
+  sheet.addRow(["EMPRESA", "01", "11102027", "2026-01-02", "1", "PAGAMENTO", "-10.00"]);
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 

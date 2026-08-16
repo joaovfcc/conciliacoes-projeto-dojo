@@ -50,4 +50,44 @@ describe("controle de saldo de extrato", () => {
       { amount: "-5.00" },
     ])).toMatchObject({ status: "NOT_AVAILABLE", movementTotal: "5.00" });
   });
+
+  it("valida saldos documentais quando o banco não fornece saldo em cada lançamento", () => {
+    expect(calculateBalanceCheck(
+      [{ amount: "100.00" }, { amount: "-20.00" }],
+      "0.01",
+      { openingBalance: "100.00", closingBalance: "180.00" },
+    )).toMatchObject({
+      status: "PASSED",
+      openingBalance: "100.00",
+      expectedClosingBalance: "180.00",
+      extractedClosingBalance: "180.00",
+      difference: "0.00",
+    });
+  });
+
+  it("falha quando os saldos documentais não fecham com os movimentos", () => {
+    expect(calculateBalanceCheck(
+      [{ amount: "100.00" }, { amount: "-20.00" }],
+      "0.01",
+      { openingBalance: "100.00", closingBalance: "175.00" },
+    )).toMatchObject({ status: "FAILED", difference: "5.00" });
+  });
+
+  it("explicita o perfil físico do razão em que o saldo seguinte subtrai o movimento", () => {
+    expect(calculateBalanceCheck(
+      [{ amount: "20.00", runningBalance: "80.00" }, { amount: "-5.00", runningBalance: "85.00" }],
+      "0.01",
+      { movementEffect: "SUBTRACTS_FROM_BALANCE" },
+    )).toEqual({
+      status: "PASSED",
+      openingBalance: "100.00",
+      creditTotal: "20.00",
+      debitTotal: "-5.00",
+      movementTotal: "15.00",
+      expectedClosingBalance: "85.00",
+      extractedClosingBalance: "85.00",
+      difference: "0.00",
+      tolerance: "0.01",
+    });
+  });
 });

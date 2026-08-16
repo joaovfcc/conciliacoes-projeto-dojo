@@ -68,12 +68,36 @@ export function statementRecord(file: SourceFileInput, position: number | string
   };
 }
 
-export function statementMetadata(file: SourceFileInput, records: StatementRecord[], extractionMethod: ExtractionMethod, parser: string, confidences: string[] = []): DetectedStatement {
+export function statementMetadata(
+  file: SourceFileInput,
+  records: StatementRecord[],
+  extractionMethod: ExtractionMethod,
+  parser: string,
+  confidences: string[] = [],
+  controls: { openingBalance?: string; closingBalance?: string; balanceMovements?: StatementRecord[] } = {},
+): DetectedStatement {
   const first = records[0];
   const confidence = confidences.length ? money(confidences.reduce((sum, item) => sum + Number(item), 0) / confidences.length) : undefined;
+  const balanceCheck = calculateBalanceCheck(
+    (controls.balanceMovements ?? records).map((record) => ({
+      amount: record.value,
+      ...(record.runningBalance ? { runningBalance: record.runningBalance } : {}),
+    })),
+    "0.01",
+    {
+      ...(controls.openingBalance !== undefined ? { openingBalance: controls.openingBalance } : {}),
+      ...(controls.closingBalance !== undefined ? { closingBalance: controls.closingBalance } : {}),
+    },
+  );
+  const openingBalance = controls.openingBalance ?? balanceCheck.openingBalance;
+  const closingBalance = controls.closingBalance ?? balanceCheck.extractedClosingBalance;
+  const finalBalance = closingBalance;
   return {
     fileId: file.id, originalName: file.originalName, bank: first?.bank ?? "", agency: first?.agency ?? "",
     account: first?.bankAccount ?? "", periods: unique(records.map((item) => periodOf(item.date))),
-    recordCount: records.length, extractionMethod, parser, classification: "CURRENT_ACCOUNT", reconciliationEligible: true, balanceCheck: calculateBalanceCheck(records.map((record) => ({ amount: record.value, ...(record.runningBalance ? { runningBalance: record.runningBalance } : {}) }))), ...(confidence ? { confidence } : {}),
+    recordCount: records.length, extractionMethod, parser, classification: "CURRENT_ACCOUNT", reconciliationEligible: true,
+    ...(openingBalance !== undefined ? { openingBalance } : {}),
+    ...(closingBalance !== undefined ? { closingBalance } : {}),
+    ...(finalBalance !== undefined ? { finalBalance } : {}), balanceCheck, ...(confidence ? { confidence } : {}),
   };
 }

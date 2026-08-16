@@ -1,21 +1,21 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import {
   assertCompanyRole,
   AuthorizationError,
+  ConfigurationError,
   WorkflowRuleError,
   ReconciliationConfigurationError,
   type ActorContext,
   type CompanyRole,
+  type ConfigurationCommandContext,
+  type ConfigurationRole,
 } from "@conciliacao/core";
 
-const roleSchema = z.enum(["PREPARER", "REVIEWER", "ADMIN", "AUDITOR"]);
-const tokenPayloadSchema = z.object({
-  actorId: z.string().trim().min(1).max(120),
-  companyRoles: z.record(z.string().trim().min(1), z.array(roleSchema).min(1)),
-  exp: z.number().int().positive(),
-});
+import { authService } from "./auth-runtime";
+import { verifyAccessToken } from "./auth-jwt";
+import type { AccessTokenClaims } from "./auth-jwt";
+import type { AuthenticatedUser } from "@conciliacao/core";
 
 export class V2HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -24,38 +24,32 @@ export class V2HttpError extends Error {
   }
 }
 
-export function createV2ActorToken(
-  payload: z.infer<typeof tokenPayloadSchema>,
-  secret: string,
-): string {
-  const encoded = Buffer.from(JSON.stringify(tokenPayloadSchema.parse(payload))).toString("base64url");
-  return `${encoded}.${sign(encoded, secret)}`;
-}
-
-export function verifyV2ActorToken(token: string, secret = requiredSecret()): ActorContext {
-  const [encoded, signature, extra] = token.split(".");
-  if (!encoded || !signature || extra) throw unauthorized();
-  const expected = Buffer.from(sign(encoded, secret), "base64url");
-  const actual = Buffer.from(signature, "base64url");
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw unauthorized();
-  try {
-    const payload = tokenPayloadSchema.parse(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")));
-    if (payload.exp <= Math.floor(Date.now() / 1000)) throw unauthorized("TOKEN_EXPIRED", "A credencial expirou");
-    return { actorId: payload.actorId, companyRoles: payload.companyRoles };
-  } catch (error) {
-    if (error instanceof V2HttpError) throw error;
-    throw unauthorized();
-  }
-}
-
-export function requireV2Actor(
+export async function requireV2Actor(
   request: NextRequest,
   companyId?: string,
   roles: readonly CompanyRole[] = ["PREPARER", "REVIEWER", "ADMIN", "AUDITOR"],
-): ActorContext {
+  dependencies: {
+    verifyAccess(token: string): Promise<AccessTokenClaims>;
+    resolveSession(sessionId: string, userId: string): Promise<AuthenticatedUser | null>;
+  } = {
+    verifyAccess: verifyAccessToken,
+    resolveSession: (sessionId, userId) => authService().resolveSession(sessionId, userId),
+  },
+): Promise<ActorContext> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw unauthorized();
-  const actor = verifyV2ActorToken(authorization.slice(7));
+  let claims;
+  try {
+    claims = await dependencies.verifyAccess(authorization.slice(7));
+  } catch {
+    throw unauthorized();
+  }
+  const user = await dependencies.resolveSession(claims.sessionId, claims.userId);
+  if (!user) throw unauthorized("SESSION_INVALID", "Sessão inválida ou expirada");
+  if (user.passwordChangeRequired) {
+    throw new V2HttpError(403, "PASSWORD_CHANGE_REQUIRED", "Troque a senha temporária antes de continuar");
+  }
+  const actor: ActorContext = { actorId: user.id, companyRoles: user.companyRoles };
   if (companyId) {
     try {
       assertCompanyRole(actor, companyId, roles);
@@ -67,6 +61,34 @@ export function requireV2Actor(
     }
   }
   return actor;
+}
+
+const configurationRoleByCompanyRole: Readonly<Record<CompanyRole, ConfigurationRole>> = {
+  PREPARER: "EDITOR",
+  REVIEWER: "APPROVER",
+  ADMIN: "ADMIN",
+  AUDITOR: "AUDITOR",
+};
+
+export function toConfigurationCommandContext(
+  request: NextRequest,
+  actor: ActorContext,
+  organizationId: string,
+  companyId: string,
+  command: { reason?: string; correlationId?: string } = {},
+): ConfigurationCommandContext {
+  const reason = command.reason?.trim() || request.headers.get("x-reason")?.trim();
+  const correlationId = command.correlationId?.trim() || request.headers.get("x-correlation-id")?.trim();
+  if (!reason) throw new V2HttpError(400, "REASON_REQUIRED", "Motivo é obrigatório");
+  if (!correlationId) {
+    throw new V2HttpError(400, "CORRELATION_ID_REQUIRED", "correlationId é obrigatório");
+  }
+  const roles = [...new Set((actor.companyRoles[companyId] ?? []).map((role) => configurationRoleByCompanyRole[role]))];
+  return {
+    actor: { actorId: actor.actorId, organizationRoles: { [organizationId]: roles } },
+    reason,
+    correlationId,
+  };
 }
 
 export function v2RouteError(error: unknown): Response {
@@ -85,6 +107,10 @@ export function v2RouteError(error: unknown): Response {
   if (error instanceof ReconciliationConfigurationError) {
     return Response.json({ error: { code: error.code, message: error.message } }, { status: 422 });
   }
+  if (error instanceof ConfigurationError) {
+    const status = configurationErrorStatus(error.code);
+    return Response.json({ error: { code: error.code, message: error.message } }, { status });
+  }
   console.error(JSON.stringify({ event: "v2_request_failed", errorType: error instanceof Error ? error.name : "Unknown" }));
   return Response.json(
     { error: { code: "INTERNAL_ERROR", message: "Não foi possível concluir a operação" } },
@@ -92,14 +118,12 @@ export function v2RouteError(error: unknown): Response {
   );
 }
 
-function requiredSecret(): string {
-  const secret = process.env.V2_AUTH_SECRET;
-  if (!secret || secret.length < 32) throw new V2HttpError(503, "AUTH_NOT_CONFIGURED", "Autorização V2 não configurada");
-  return secret;
-}
-
-function sign(payload: string, secret: string): string {
-  return createHmac("sha256", secret).update(payload).digest("base64url");
+function configurationErrorStatus(code: string): number {
+  if (code === "FORBIDDEN") return 403;
+  if (code === "NOT_FOUND" || code === "SNAPSHOT_NOT_FOUND") return 404;
+  if (code.startsWith("DUPLICATE_") || code === "IDEMPOTENCY_CONFLICT" || code === "FILE_DUPLICATE"
+    || code === "FILE_NAME_CONTENT_CHANGED") return 409;
+  return 422;
 }
 
 function unauthorized(code = "UNAUTHORIZED", message = "Credencial ausente ou inválida"): V2HttpError {

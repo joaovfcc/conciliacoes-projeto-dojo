@@ -73,7 +73,13 @@ export async function preflightFiles(
   const ledgerAccounts = [...groupCount(ledgerResult.records, (item) => `${item.company}|${item.branch}|${item.ledgerAccount}`).entries()].map(([key, recordCount]) => {
     const [company = "", branch = "", account = ""] = key.split("|");
     const metadata = account === ledgerResult.metadata.ledgerAccount ? ledgerResult.metadata : undefined;
-    return { company, branch, account, bank: metadata?.bank ?? "", agency: metadata?.agency ?? "", bankAccount: metadata?.bankAccount ?? "", recordCount };
+    return {
+      company, branch, account, bank: metadata?.bank ?? "", agency: metadata?.agency ?? "", bankAccount: metadata?.bankAccount ?? "", recordCount,
+      ...(metadata?.openingBalance !== undefined ? { openingBalance: metadata.openingBalance } : {}),
+      ...(metadata?.closingBalance !== undefined ? { closingBalance: metadata.closingBalance } : {}),
+      ...(metadata?.balanceCheck !== undefined ? { balanceCheck: metadata.balanceCheck } : {}),
+      ...(metadata?.balanceMovementEffect !== undefined ? { balanceMovementEffect: metadata.balanceMovementEffect } : {}),
+    };
   });
   const preflight: PreflightResult = {
     companies,

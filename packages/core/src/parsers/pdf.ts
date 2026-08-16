@@ -85,8 +85,10 @@ export async function parsePdf(file: SourceFileInput, ocrProvider?: OcrProvider,
   if (selection.status === "AMBIGUOUS") throw new StatementParseError("DOCUMENT_CLASSIFICATION_AMBIGUOUS", "O banco ou o tipo de documento não pôde ser identificado com segurança.");
   if (selection.status === "UNSUPPORTED") throw new StatementParseError("PDF_LAYOUT_UNSUPPORTED", "O layout deste PDF ainda não é reconhecido com segurança.");
 
-  const doc = await selection.adapter.parse(source);
-  return adaptCanonicalToLegacyResult(file, pages, doc);
+  const parsedDocument = await selection.adapter.parse(source);
+  const validation = selection.adapter.validate(parsedDocument);
+  const validatedDocument = { ...parsedDocument, issues: validation.issues };
+  return adaptCanonicalToLegacyResult(file, pages, validatedDocument);
 }
 
 function adaptCanonicalToLegacyResult(file: SourceFileInput, pages: PdfPage[], doc: CanonicalStatementDocument): PdfStatementResult {
@@ -155,7 +157,14 @@ function adaptCanonicalToLegacyResult(file: SourceFileInput, pages: PdfPage[], d
     ...(doc.period?.end ? [periodOf(doc.period.end)] : []),
   ];
 
-  const balanceCheck = calculateBalanceCheck(records.map((record) => ({ amount: record.value, ...(record.runningBalance ? { runningBalance: record.runningBalance } : {}) })));
+  const balanceCheck = calculateBalanceCheck(
+    records.map((record) => ({ amount: record.value, ...(record.runningBalance ? { runningBalance: record.runningBalance } : {}) })),
+    "0.01",
+    {
+      ...(doc.openingBalance !== undefined ? { openingBalance: doc.openingBalance } : {}),
+      ...(doc.closingBalance !== undefined ? { closingBalance: doc.closingBalance } : {}),
+    },
+  );
 
   if (doc.documentType === "CURRENT_ACCOUNT") {
     if (records.length === 0) {
@@ -174,6 +183,8 @@ function adaptCanonicalToLegacyResult(file: SourceFileInput, pages: PdfPage[], d
     issues.push(issue("WARNING", "POSICAO_INVESTIMENTO_INFORMATIVA", "O documento contém uma posição de investimento para conferência e não será conciliado lançamento a lançamento.", file.id));
   } else if (doc.documentType === "INVESTMENT_ACTIVITY") {
     issues.push(issue("WARNING", "MOVIMENTOS_INVESTIMENTO_INFORMATIVOS", "Os movimentos de investimento são informativos e não serão conciliados com o razão.", file.id));
+  } else if (!issues.some((item) => item.code.endsWith("_INFORMATIVO"))) {
+    issues.push(issue("WARNING", "DOCUMENTO_FINANCEIRO_INFORMATIVO", "O documento financeiro é informativo e não será conciliado automaticamente com o razão.", file.id));
   }
 
   const metadata: DetectedStatement = {

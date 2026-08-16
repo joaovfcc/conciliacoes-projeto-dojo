@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import { bradescoInvestmentAdapter } from "../../../src/adapters/bradesco-investment.js"
 import { itauInvestmentAdapter } from "../../../src/adapters/itau-investment.js"
 import { santanderInvestmentAdapter } from "../../../src/adapters/santander-investment.js"
+import { v2AdapterRegistry } from "../../../src/adapters/index.js"
 import { sofisaPositionAdapter } from "../../../src/adapters/sofisa-position.js"
 import { type ExtractedStatementSource } from "../../../src/statement-sources.js"
 
@@ -61,6 +62,43 @@ describe("Investment V2 adapters", () => {
   })
 
   describe("Sofisa Position", () => {
+    it.each([
+      ["BMG", "BANCO BMG\nPOSICAO DE INVESTIMENTOS"],
+      ["Safra", "BANCO SAFRA\nFUNDO (POSICAO DE INVESTIMENTOS EM 31/12/2025)"],
+    ])("does not classify a generic %s investment position as Sofisa", (_bank, text) => {
+      expect(v2AdapterRegistry.select(pdfSource([text])).status).toBe("UNSUPPORTED")
+    })
+
+    it("detects and parses the Sofisa fixed-income position layout", async () => {
+      const source = pdfSource([
+        "Banco Sofisa",
+        "Consulta de posicao - renda fixa (31/12/2025)",
+        "Agencia: 00019",
+        "Conta: 0001420722",
+        "Valor liquido total R$ 1.114.704,15",
+        "Produto Valor aplicado Valor liquido Rentabilidade Emissao Vencimento IR IOF",
+        "CDB FL1 P DI R$ 741.800,00 R$ 803.847,67 90,0% 13/03/2025 03/04/2028 R$ 15.511,91 R$ 0,00",
+      ])
+
+      const selection = v2AdapterRegistry.select(source)
+      expect(selection.status).toBe("SELECTED")
+      expect(selection.status === "SELECTED" ? selection.adapter.adapterId : undefined).toBe("SOFISA_NET_POSICAO")
+
+      const doc = await sofisaPositionAdapter.parse(source)
+      expect(doc.identity).toMatchObject({
+        bankCode: "633",
+        bankName: "SOFISA",
+        agency: { normalized: "00019" },
+        account: { normalized: "0001420722" },
+      })
+      expect(doc.period).toEqual({ start: "2025-12-31", end: "2025-12-31" })
+      expect(doc.closingBalance).toBe("1.114.704,15")
+      expect(doc.investments).toEqual([
+        expect.objectContaining({ kind: "POSITION", amount: "803847.67", description: "CDB FL1 P DI" }),
+      ])
+      expect(doc.transactions).toHaveLength(0)
+    })
+
     it("parses CDB positions", async () => {
       const source = pdfSource([
         "AGENCIA: 1234 CONTA: 56789-0",

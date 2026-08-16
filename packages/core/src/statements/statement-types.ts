@@ -19,6 +19,7 @@ export interface StatementLayoutProfile {
   columns: {
     date: string[];
     description: string[];
+    descriptionComplement?: string[];
     document?: string[];
     amount?: string[];
     debit?: string[];
@@ -33,6 +34,9 @@ export interface StatementLayoutProfile {
     repeatedHeaderPolicy?: "IGNORE" | "ERROR";
     ignoreRowPatterns?: string[];
     stopPatterns?: string[];
+    openingBalancePatterns?: string[];
+    closingBalancePatterns?: string[];
+    balanceExclusionPatterns?: string[];
   };
 }
 
@@ -63,5 +67,7 @@ export interface ParsedStatement {
   metadata?: {
     agency?: string;
     account?: string;
+    openingBalance?: number;
+    closingBalance?: number;
   };
 }

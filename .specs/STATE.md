@@ -1,6 +1,6 @@
 # Estado de execução do PRD V2
 
-Atualizado em: 2026-08-09
+Atualizado em: 2026-08-10
 
 ## Decisões vigentes
 
@@ -14,8 +14,11 @@ Atualizado em: 2026-08-09
 - `AD-008` — `v0.2.0-rc.1` representa apenas o Lote 1 PDF. A conclusão do PRD V2 exige o gate global do corpus ou bloqueio externo formal.
 - `AD-009` — A reestruturação usa decimal string no domínio e `Decimal` no PostgreSQL; conversões para `number` não podem cruzar o boundary financeiro.
 - `AD-010` — A API V2 aplica autorização por empresa e papel por meio de um contexto de ator desacoplado do provedor corporativo de identidade.
-- `AD-011` — A API de sessão anônima existente permanece como compatibilidade durante a migração; o novo domínio persistente não depende dela.
+- `AD-011` — Superseded by `AD-013`: a API de sessão anônima permanecia como compatibilidade durante a migração.
 - `AD-012` — O gate inicial de mutation testing usa `high=80`, `low=65` e `break=55`, sem excluir regras financeiras; a meta deve subir progressivamente conforme os mutantes sobreviventes forem classificados.
+- `AD-013` — A aplicação exige login. O tenant é `ConfigOrganization`; papéis operacionais são concedidos por `ConfigLegalEntity`; `OWNER` administra o tenant. Esta decisão substitui a compatibilidade anônima de `AD-011`.
+- `AD-014` — O browser mantém o access JWT apenas em memória. O refresh token opaco é rotativo, persistido somente por hash e enviado em cookie `HttpOnly`, `SameSite=Lax` e `Secure` em produção.
+- `AD-015` — Sessões autenticadas têm access JWT de 10 minutos, expiração por 8 horas de inatividade e limite absoluto de 24 horas. Resultados autenticados são retidos por um ano; arquivos de entrada continuam temporários.
 
 ## Baseline protegido
 
@@ -35,7 +38,7 @@ Atualizado em: 2026-08-09
 Concluído em `T02`: inventário reprodutível por pasta ou ZIP, com trava opcional de quantidade. A
 execução privada encontrou 68 PDFs, 68 hashes únicos e persistiu apenas metadados sanitizados.
 
-Concluído em `T03`: catálogo tipado com 35 famílias, 68 PDFs e 18 instituições; invariantes por lote
+Concluído em `T03`: catálogo tipado com 36 famílias, 68 PDFs e 18 instituições; invariantes por lote
 estão cobertos por teste e a matriz documental foi atualizada.
 
 Estrutura de `T04` concluída: 68 PDFs presentes; OFX, CSV e XLSX bancário estão `NOT_PROVIDED` para
@@ -63,7 +66,15 @@ Concluída a **Fase 3 (Plataforma CSV Genérica)** (`T30` a `T33`):
 - Testes robustos de detecção de encoding (BOM), delimitadores, injection e normalizadores de datas e valores.
 - Matriz de suporte com estado `TECHNICALLY_READY_AWAITING_SAMPLE` para CSV.
 
-Em andamento: Handoff para a próxima fase.
+Em andamento: ciclo do Lote 3. O adapter textual `BOCOM_CC_ANALITICO` processou o documento privado
+com 8 movimentos e sem erro de integridade; o resultado aguarda oráculo contábil. O contrato
+`BOCOM_CC_EMPTY` está implementado e testado, mas o documento privado permanece `AWAITING_OCR` e
+não expõe período suficiente para inferência automática. As famílias Caixa processaram duas contas
+correntes (17 e 3 movimentos) e um fundo (3 evidências informativas), sem erros de integridade e
+aguardando oráculos. Daycoval processou 13, 0 e 29 movimentos com todos os controles diários
+aprovados. Guanabara processou conta-corrente e conta vinculada com ausência explícita de
+movimentos. O build do core agora elimina artefatos compilados órfãos antes do inventário. O gate
+técnico do Lote 3 aguarda a suíte integral; depois, a próxima instituição é Paulista no Lote 4.
 
 ## Reestruturação modular concluída em 2026-08-09
 

@@ -1,6 +1,6 @@
 # Matriz de suporte do PRD V2
 
-Esta matriz é derivada do inventário privado executado em 2026-08-03. O artefato privado contém
+Esta matriz é derivada do inventário privado executado em 2026-08-10. O artefato privado contém
 somente hash SHA-256, classificação, família do parser e códigos de diagnóstico; não contém nomes,
 contas, valores, texto ou dados de empresa.
 
@@ -20,10 +20,10 @@ derivados, classificação, adapter e diagnósticos; caminho e nome original nun
 ## Resultado do inventário
 
 - 68 PDFs e 18 instituições inventariados.
-- 11 PDFs foram extraídos, mas permanecem `PARSED_AWAITING_ORACLE`.
+- 32 PDFs foram extraídos, mas permanecem `PARSED_AWAITING_ORACLE`.
 - 5 PDFs foram reconhecidos, porém falharam no gate de movimentos.
 - 18 PDFs exigem OCR em português.
-- 32 layouts textuais estão explicitamente sem adapter.
+- 11 layouts textuais estão explicitamente sem adapter.
 - 2 PDFs protegidos por senha são bloqueados com diagnóstico explícito.
 
 “Pista de inventário” é derivada apenas do nome privado para agrupar a cobertura. Ela não é usada
@@ -31,16 +31,16 @@ pela detecção, pelo parser ou pela conciliação. “Detectado” é a identid
 
 | Instituição (pista) | PDFs | Estado observado | Detectado pelo parser | Estado de suporte | Próxima unidade verificável |
 |---|---:|---|---|---|---|
-| ABC Brasil | 4 | 4 layouts não suportados | — | Sem adapter | Classificar famílias e criar adapter por layout |
-| Banco do Brasil | 2 | 2 layouts não suportados | — | Sem adapter | Conta corrente e Rende Fácil separadamente |
-| BMG | 5 | 5 layouts não suportados | — | Sem adapter | Conta corrente e posição em adapters distintos |
-| BMP | 1 | 1 layout não suportado | — | Sem adapter | Criar contrato/fixture do layout |
-| Bocom | 2 | 1 OCR pendente, 1 layout não suportado | — | Sem adapter | Validar documento sem movimentos antes de OCR |
+| ABC Brasil | 4 | 4 extraídos | 2 CC, 2 contas vinculadas | Dois adapters implementados, aguardando oráculo | Revisar oráculos e homologar controles de saldo |
+| Banco do Brasil | 2 | 2 extraídos | 1 CC, 1 Rende Fácil | Dois adapters implementados, aguardando oráculo | Revisar oráculos e homologar os controles de saldo |
+| BMG | 5 | 5 extraídos | 4 CC, 1 posição | Implementado, aguardando oráculo e saldo por movimento | Revisar oráculos e homologar o controle de saldo aplicável |
+| BMP | 1 | 1 extraído | 1 CC | Adapter implementado, aguardando oráculo | Revisar oráculo e homologar controle de saldo acumulado |
+| Bocom | 2 | 1 OCR pendente, 1 extraído | 1 CC analítica | Analítico implementado; vazio possui contrato e aguarda OCR | Revisar oráculo do analítico e executar o vazio com OCR `por` |
 | Bradesco | 9 | 8 extraídos, 1 OCR pendente | 6 CC, 2 investimento | Implementado, aguardando oráculo e saldo | Controles de saldo e fixture por família |
 | BRB | 1 | 1 reconhecido com gate de movimentos | 1 CC | Implementado, aguardando oráculo e correção | Homologar extração dos movimentos de referência |
-| Caixa | 3 | 3 layouts não suportados | — | Sem adapter | Conta corrente e fundo separadamente |
-| Daycoval | 3 | 3 layouts não suportados | — | Sem adapter | Criar contrato/fixture do layout |
-| Guanabara | 2 | 2 layouts não suportados | — | Sem adapter | Criar contrato/fixture do layout |
+| Caixa | 3 | 3 extraídos | 2 CC, 1 fundo | Dois adapters implementados, aguardando oráculos | Revisar oráculos e homologar os controles de saldo e investimento |
+| Daycoval | 3 | 3 extraídos | 3 CC | Adapter implementado, aguardando oráculos | Revisar oráculos dos resultados com 13, 0 e 29 movimentos |
+| Guanabara | 2 | 2 extraídos sem movimentos | 1 CC, 1 conta vinculada | Dois adapters implementados, aguardando oráculos | Confirmar saldos e ausência de movimentos nos oráculos |
 | Itaú | 2 | 2 OCR pendentes | — | OCR não homologado | Habilitar OCR `por`, depois separar CC e Aplic Aut Mais |
 | Paulista | 2 | 2 layouts não suportados | — | Sem adapter | Criar contrato/fixture do layout |
 | Pine | 3 | 3 layouts não suportados | — | Sem adapter | Criar contrato/fixture do layout |
@@ -53,7 +53,7 @@ pela detecção, pelo parser ou pela conciliação. “Detectado” é a identid
 ## Matriz completa por família PDF
 
 Esta é a unidade real de suporte. A matriz tipada equivalente vive em
-`packages/core/src/corpus-support-matrix.ts`; testes impedem que uma das 35 famílias ou um dos 68
+`packages/core/src/corpus-support-matrix.ts`; testes impedem que uma das 36 famílias ou um dos 68
 documentos seja removido silenciosamente.
 
 | Lote | Instituição | Tipo | Família | Qtd. | Extração | Status atual |
@@ -67,19 +67,20 @@ documentos seja removido silenciosamente.
 | 1 | Santander | Aplicação | `SANTANDER_IBE_INVEST` | 1 | OCR | `INFORMATIONAL_ONLY` |
 | 1 | Sofisa | Conta-corrente | `SOFISA_NET_CC` | 5 | Texto | `PARTIAL_ADAPTER` |
 | 1 | Sofisa | Posição | `SOFISA_RENDA_FIXA_POSICAO` | 1 | Texto | `INFORMATIONAL_ONLY` |
-| 2 | ABC Brasil | Conta-corrente | `ABC_CC_EXTRATO_DETALHADO` | 4 | Texto | `UNSUPPORTED` |
-| 2 | Banco do Brasil | Conta-corrente | `BB_CC_CONSULTAS` | 1 | Texto | `UNSUPPORTED` |
-| 2 | Banco do Brasil | Rende Fácil | `BB_RENDE_FACIL_RESUMO` | 1 | Texto | `UNSUPPORTED` |
-| 2 | BMG | Conta-corrente | `BMG_CC_WEB` | 4 | Texto | `UNSUPPORTED` |
-| 2 | BMG | Investimento | `BMG_POSICAO_RENDIMENTO` | 1 | Texto | `UNSUPPORTED` |
-| 2 | BMP | Conta-corrente | `BMP_CC_EXTRATO` | 1 | Texto | `UNSUPPORTED` |
+| 2 | ABC Brasil | Conta-corrente | `ABC_CC_EXTRATO_DETALHADO` | 2 | Texto | `PARTIAL_ADAPTER` |
+| 2 | ABC Brasil | Conta vinculada | `ABC_CONTA_VINCULADA` | 2 | Texto | `PARTIAL_ADAPTER` |
+| 2 | Banco do Brasil | Conta-corrente | `BB_CC_CONSULTAS` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 2 | Banco do Brasil | Rende Fácil | `BB_RENDE_FACIL_RESUMO` | 1 | Texto | `AWAITING_ORACLE` |
+| 2 | BMG | Conta-corrente | `BMG_CC_WEB` | 4 | Texto | `PARTIAL_ADAPTER` |
+| 2 | BMG | Investimento | `BMG_POSICAO_RENDIMENTO` | 1 | Texto | `AWAITING_ORACLE` |
+| 2 | BMP | Conta-corrente | `BMP_CC_EXTRATO` | 1 | Texto | `PARTIAL_ADAPTER` |
 | 3 | Bocom | Conta-corrente sem movimentos | `BOCOM_CC_EMPTY` | 1 | OCR | `AWAITING_OCR` |
-| 3 | Bocom | Conta-corrente analítica | `BOCOM_CC_ANALITICO` | 1 | Texto | `UNSUPPORTED` |
-| 3 | Caixa | Conta-corrente | `CAIXA_CC_EXTRATO_PERIODO` | 2 | Texto | `UNSUPPORTED` |
-| 3 | Caixa | Fundo | `CAIXA_FUNDO_EXTRATO` | 1 | Texto | `UNSUPPORTED` |
-| 3 | Daycoval | Conta-corrente | `DAYCOVAL_CC_EXTRATO_DETALHADO` | 3 | Texto | `UNSUPPORTED` |
-| 3 | Guanabara | Conta-corrente | `GUANABARA_CC` | 1 | Texto | `UNSUPPORTED` |
-| 3 | Guanabara | Conta vinculada | `GUANABARA_CONTA_VINCULADA` | 1 | Texto | `UNSUPPORTED` |
+| 3 | Bocom | Conta-corrente analítica | `BOCOM_CC_ANALITICO` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 3 | Caixa | Conta-corrente | `CAIXA_CC_EXTRATO_PERIODO` | 2 | Texto | `PARTIAL_ADAPTER` |
+| 3 | Caixa | Fundo | `CAIXA_FUNDO_EXTRATO` | 1 | Texto | `AWAITING_ORACLE` |
+| 3 | Daycoval | Conta-corrente | `DAYCOVAL_CC_EXTRATO_DETALHADO` | 3 | Texto | `PARTIAL_ADAPTER` |
+| 3 | Guanabara | Conta-corrente | `GUANABARA_CC` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 3 | Guanabara | Conta vinculada | `GUANABARA_CONTA_VINCULADA` | 1 | Texto | `PARTIAL_ADAPTER` |
 | 4 | Paulista | Conta-corrente | `PAULISTA_CC_DEMONSTRATIVO` | 1 | Texto | `UNSUPPORTED` |
 | 4 | Paulista | Conta vinculada | `PAULISTA_CONTA_VINCULADA` | 1 | Texto | `UNSUPPORTED` |
 | 4 | Pine | Conta-corrente | `PINE_CC` | 1 | Texto | `UNSUPPORTED` |

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { InMemoryCompletedReconciliationRepository } from "../../packages/core/src/index";
 import type { ConfirmProcessingRequest, LedgerRecord, PreflightResult, StatementRecord } from "../../packages/core/src/types";
 import { loadRuntimeConfig } from "../../packages/runtime/src/config";
 import { LocalObjectStore } from "../../packages/runtime/src/object-store";
@@ -28,9 +29,9 @@ const confirmation: ConfirmProcessingRequest = {
 describe("gate de conta bancária", () => {
   it("não deixa conta incompatível alcançar o reconciliador", async () => {
     const config = { ...loadRuntimeConfig({}), localStoragePath: ".test-storage" };
-    const runtime = new RuntimeServices(config, new MemorySessionStore(config), new LocalObjectStore(config));
+    const runtime = new RuntimeServices(config, new MemorySessionStore(config), new LocalObjectStore(config), new InMemoryCompletedReconciliationRepository());
     const session: ReconciliationSession = {
-      id: "session", tokenHash: "hash", clientKey: "client", createdAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T02:00:00.000Z", lastHeartbeatAt: "2026-01-01T00:00:00.000Z",
+      id: "session", tokenHash: "hash", clientKey: "client", actorId: "user", organizationId: "org", companyId: "company", createdAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T02:00:00.000Z", lastHeartbeatAt: "2026-01-01T00:00:00.000Z",
       status: "AWAITING_CONFIRMATION", progress: 35, progressMessage: "ok", files: [], preflight, ledgers: [ledger], statements: [statement], closed: false,
     };
 
@@ -40,14 +41,14 @@ describe("gate de conta bancária", () => {
 
   it("não deixa extrato com controle de saldo falho alcançar o reconciliador", async () => {
     const config = { ...loadRuntimeConfig({}), localStoragePath: ".test-storage" };
-    const runtime = new RuntimeServices(config, new MemorySessionStore(config), new LocalObjectStore(config));
+    const runtime = new RuntimeServices(config, new MemorySessionStore(config), new LocalObjectStore(config), new InMemoryCompletedReconciliationRepository());
     const balancedStatement = { ...statement, agency: "0191", bankAccount: "26775-6" };
     const preflightWithBalanceFailure: PreflightResult = {
       ...preflight,
       statements: [{ ...preflight.statements[0]!, agency: "0191", account: "26775-6", balanceCheck: { status: "FAILED", creditTotal: "10.00", debitTotal: "0.00", movementTotal: "10.00", tolerance: "0.01", difference: "1.00" } }],
     };
     const session: ReconciliationSession = {
-      id: "session-balance", tokenHash: "hash", clientKey: "client", createdAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T02:00:00.000Z", lastHeartbeatAt: "2026-01-01T00:00:00.000Z",
+      id: "session-balance", tokenHash: "hash", clientKey: "client", actorId: "user", organizationId: "org", companyId: "company", createdAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T02:00:00.000Z", lastHeartbeatAt: "2026-01-01T00:00:00.000Z",
       status: "AWAITING_CONFIRMATION", progress: 35, progressMessage: "ok", files: [], preflight: preflightWithBalanceFailure, ledgers: [ledger], statements: [balancedStatement], closed: false,
     };
 

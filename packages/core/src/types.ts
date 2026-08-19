@@ -212,6 +212,29 @@ export type AccountMapping = {
 
 export type ControlStatus = "PASSED" | "FAILED" | "NOT_AVAILABLE";
 
+export type LineCoverageMetric = {
+  covered: string;
+  total: string;
+  pending?: string;
+  percentage: string;
+  formula?: string;
+  label?: string;
+};
+
+export type ValueCoverageMetric = {
+  covered: string;
+  total: string;
+  pending?: string;
+  percentage: string;
+  formula?: string;
+  label?: string;
+};
+
+export type CoverageBreakdown = {
+  lines: LineCoverageMetric;
+  absoluteValue: ValueCoverageMetric;
+};
+
 export type ProcessingControls = {
   tolerance: string;
   signProfiles: SignProfile[];
@@ -232,8 +255,15 @@ export type ProcessingControls = {
     closingStatus: ControlStatus;
   };
   coverage: {
-    lines: { covered: string; total: string; percentage: string };
-    absoluteValue: { covered: string; total: string; percentage: string };
+    lines: LineCoverageMetric;
+    absoluteValue: ValueCoverageMetric;
+    ledger?: CoverageBreakdown;
+    statementOperational?: CoverageBreakdown;
+    statementTotal?: CoverageBreakdown;
+    overallOperational?: CoverageBreakdown;
+    statement?: CoverageBreakdown;
+    operational?: CoverageBreakdown;
+    overall?: CoverageBreakdown;
   };
   countsByStatus: Array<{ status: ResultStatus; count: string }>;
   pendingByDate: Array<{

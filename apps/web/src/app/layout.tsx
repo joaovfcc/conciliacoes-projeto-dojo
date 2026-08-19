@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Conciliação Bancária",
-  description: "Conciliação temporária entre razão Protheus e extratos bancários",
+  title: "Concilia — Razão Protheus × Extratos Bancários",
+  description: "Razão Protheus × Extratos Bancários",
   robots: { index: false, follow: false, noarchive: true },
 };
 

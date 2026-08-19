@@ -105,12 +105,23 @@ describe("fachada de reconciliação", () => {
     );
 
     expect(output.results[0]?.status).toBe("AUTO_MATCH_EXACT");
-    expect(output.controls).toEqual({
+    expect(output.controls).toMatchObject({
       tolerance: "0.05",
       signProfiles: ["BANK_ASSET"],
       movements: { bankConciliable: "-100.00", ledger: "-100.00", difference: "0.00", status: "PASSED" },
       balances: { bankOpening: "500.00", ledgerOpening: "500.00", openingDifference: "0.00", openingStatus: "PASSED", bankClosing: "400.00", ledgerClosing: "400.00", closingDifference: "0.00", closingStatus: "PASSED" },
-      coverage: { lines: { covered: "1", total: "1", percentage: "100.00" }, absoluteValue: { covered: "100.00", total: "100.00", percentage: "100.00" } },
+      coverage: {
+        lines: { covered: "2", total: "2", percentage: "100.00" },
+        absoluteValue: { covered: "200.00", total: "200.00", percentage: "100.00" },
+        ledger: {
+          lines: { covered: "1", total: "1", percentage: "100.00" },
+          absoluteValue: { covered: "100.00", total: "100.00", percentage: "100.00" },
+        },
+        statementOperational: {
+          lines: { covered: "1", total: "1", percentage: "100.00" },
+          absoluteValue: { covered: "100.00", total: "100.00", percentage: "100.00" },
+        },
+      },
       countsByStatus: [{ status: "AUTO_MATCH_EXACT", count: "1" }],
       pendingByDate: [],
     });
@@ -154,7 +165,7 @@ describe("fachada de reconciliação", () => {
     );
 
     expect(output.results).toContainEqual(expect.objectContaining({ status: "BANK_NET_ZERO" }));
-    expect(output.controls?.coverage).toEqual({
+    expect(output.controls?.coverage).toMatchObject({
       lines: { covered: "0", total: "2", percentage: "0.00" },
       absoluteValue: { covered: "0.00", total: "100.00", percentage: "0.00" },
     });

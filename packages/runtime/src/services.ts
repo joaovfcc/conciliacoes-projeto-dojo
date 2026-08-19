@@ -3,7 +3,17 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { bankAccountsConflict, generateXlsx, preflightFiles, reconcile, StatementParseError, type CompletedReconciliationRepository, type ConfirmProcessingRequest, type OcrProvider, type SourceFileInput } from "@conciliacao/core";
+import {
+  bankAccountsConflict,
+  generateXlsx,
+  preflightFiles,
+  reconcile,
+  StatementParseError,
+  type CompletedReconciliationRepository,
+  type ConfirmProcessingRequest,
+  type OcrProvider,
+  type SourceFileInput,
+} from "@conciliacao/core";
 import { Queue } from "bullmq";
 import type { RuntimeConfig } from "./config.js";
 import type { ObjectStore } from "./object-store.js";
@@ -16,7 +26,7 @@ export class RuntimeServices {
     readonly sessions: SessionStore,
     readonly objects: ObjectStore,
     readonly completedReconciliations: CompletedReconciliationRepository,
-  ) {}
+  ) { }
 
   async registerUpload(session: ReconciliationSession, input: { kind: "LEDGER" | "STATEMENT"; originalName: string; contentType: string; size: number }): Promise<{ file: StoredFile; uploadUrl: string | null }> {
     validateUploadShape(session, input, this.config);
@@ -28,13 +38,13 @@ export class RuntimeServices {
   async completeUpload(session: ReconciliationSession, fileId: string): Promise<StoredFile> {
     const file = session.files.find((item) => item.id === fileId); if (!file) throw new PublicRuntimeError("ARQUIVO_NAO_ENCONTRADO", "O arquivo não pertence a esta sessão.", 404);
     try {
-    const buffer = await this.objects.get(file.objectKey); if (buffer.length !== file.size) throw new PublicRuntimeError("TAMANHO_DIVERGENTE", "O tamanho recebido difere do upload autorizado.", 400);
-    validateSignature(file, buffer); validateOfficeArchive(file, buffer); await scanBuffer(buffer, file.originalName, this.config);
-    file.sha256 = createHash("sha256").update(buffer).digest("hex");
-    const duplicate = session.files.find((item) => item.id !== file.id && item.sha256 === file.sha256); if (duplicate) throw new PublicRuntimeError("ARQUIVO_DUPLICADO", "O mesmo conteúdo foi enviado mais de uma vez.", 400);
-    const ledgerCount = session.files.filter((item) => item.kind === "LEDGER" && item.sha256).length;
-    const statementCount = session.files.filter((item) => item.kind === "STATEMENT" && item.sha256).length;
-    session.status = ledgerCount === 1 && statementCount >= 1 ? "READY" : "UPLOADING"; await this.sessions.save(session); return file;
+      const buffer = await this.objects.get(file.objectKey); if (buffer.length !== file.size) throw new PublicRuntimeError("TAMANHO_DIVERGENTE", "O tamanho recebido difere do upload autorizado.", 400);
+      validateSignature(file, buffer); validateOfficeArchive(file, buffer); await scanBuffer(buffer, file.originalName, this.config);
+      file.sha256 = createHash("sha256").update(buffer).digest("hex");
+      const duplicate = session.files.find((item) => item.id !== file.id && item.sha256 === file.sha256); if (duplicate) throw new PublicRuntimeError("ARQUIVO_DUPLICADO", "O mesmo conteúdo foi enviado mais de uma vez.", 400);
+      const ledgerCount = session.files.filter((item) => item.kind === "LEDGER" && item.sha256).length;
+      const statementCount = session.files.filter((item) => item.kind === "STATEMENT" && item.sha256).length;
+      session.status = ledgerCount === 1 && statementCount >= 1 ? "READY" : "UPLOADING"; await this.sessions.save(session); return file;
     } catch (error) {
       try {
         await this.deleteObject(file.objectKey);

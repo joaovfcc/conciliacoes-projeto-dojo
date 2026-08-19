@@ -5,8 +5,7 @@ import { parseOfx } from "./parsers/ofx.js";
 import { parsePdf } from "./parsers/pdf.js";
 import { parseTabularStatement } from "./parsers/tabular.js";
 import { tabularRows } from "./parsers/tabular-utils.js";
-import { ITAU_CHECKING_XLSX_V1 } from "./statements/profiles/itau-checking-xlsx-v1.js";
-import { GENERIC_STATEMENT_V1 } from "./statements/profiles/generic-statement-v1.js";
+import { STATEMENT_PROFILE_REGISTRY } from "./statements/profile-registry.js";
 
 import type { SourceFileInput, OcrProvider, ParsedInputBundle } from "./parsers/types.js";
 import type { StatementRecord, DetectedStatement, ImportIssue, InvestmentEntry, PreflightResult } from "./types.js";
@@ -21,7 +20,7 @@ export async function parseStatement(
   if (extension === "pdf") return parsePdf(file, ocrProvider, options.maxPdfPages);
 
   if (["csv", "xlsx", "xls", "xlsm"].includes(extension)) {
-     return parseTabularStatement(file, [ITAU_CHECKING_XLSX_V1, GENERIC_STATEMENT_V1]);
+     return parseTabularStatement(file, STATEMENT_PROFILE_REGISTRY);
   }
 
   const rows = await tabularRows(file);

@@ -1,12 +1,21 @@
 import { createHash } from "node:crypto";
 import {
   ReconciliationEngine,
+  normalizeReconciliationText,
+  reconciliationTextSimilarity,
+  extractSemanticCategories,
+  extractBankHint,
+  extractFinancialHint,
+  calculateCandidateScore,
+  type CandidateScoreBreakdown,
+  type FinancialHint,
   type ReconciliationAuditEntry,
   type ReconciliationEngineOutput,
   type ReconciliationMatchGroup,
   type ReconciliationStatus,
   type ReconciliationTransaction,
 } from "./reconciliation/domain/ReconciliationEngine.js";
+import { normalizeDocumentId, dayDifference } from "./normalization.js";
 import type {
   AccountMapping,
   ConfirmProcessingRequest,
@@ -427,10 +436,63 @@ function consolidatedControls(
     "RECONCILED_GROUP",
     "RECONCILED_DAILY_TOTAL",
   ]);
-  const coverageTransactions = conciliableBank;
-  const coveredTransactions = coverageTransactions.filter((item) => coveredStatuses.has(item.status));
-  const coveredAbsolute = totalCents(coveredTransactions.map((item) => absoluteCents(item.amountCents)));
-  const totalAbsolute = totalCents(coverageTransactions.map((item) => absoluteCents(item.amountCents)));
+
+  // 1. Ledger Coverage (Razão)
+  const ledgerTransactions = transactions.filter((item) => item.source === "LEDGER");
+  const ledgerCovered = ledgerTransactions.filter((item) => coveredStatuses.has(item.status));
+  const ledgerPending = ledgerTransactions.filter((item) => !coveredStatuses.has(item.status));
+  const ledgerCoveredLines = ledgerCovered.length;
+  const ledgerTotalLines = ledgerTransactions.length;
+  const ledgerPendingLines = ledgerPending.length;
+  const ledgerLinePct = percentage(BigInt(ledgerCoveredLines), BigInt(ledgerTotalLines));
+  const ledgerCoveredAbs = totalCents(ledgerCovered.map((item) => absoluteCents(item.amountCents)));
+  const ledgerTotalAbs = totalCents(ledgerTransactions.map((item) => absoluteCents(item.amountCents)));
+  const ledgerPendingAbs = totalCents(ledgerPending.map((item) => absoluteCents(item.amountCents)));
+  const ledgerValuePct = percentage(ledgerCoveredAbs, ledgerTotalAbs);
+
+  // 2. Statement Operational Coverage (Extrato Operacional, sem aplicações automáticas)
+  const stmtOperationalTransactions = transactions.filter(
+    (item) => item.source === "BANK" && item.status !== "EXCLUDED_AUTO_APPLICATION",
+  );
+  const stmtOperationalCovered = stmtOperationalTransactions.filter((item) => coveredStatuses.has(item.status));
+  const stmtOperationalPending = stmtOperationalTransactions.filter((item) => !coveredStatuses.has(item.status));
+  const stmtOperationalCoveredLines = stmtOperationalCovered.length;
+  const stmtOperationalTotalLines = stmtOperationalTransactions.length;
+  const stmtOperationalPendingLines = stmtOperationalPending.length;
+  const stmtOperationalLinePct = percentage(BigInt(stmtOperationalCoveredLines), BigInt(stmtOperationalTotalLines));
+  const stmtOperationalCoveredAbs = totalCents(stmtOperationalCovered.map((item) => absoluteCents(item.amountCents)));
+  const stmtOperationalTotalAbs = totalCents(stmtOperationalTransactions.map((item) => absoluteCents(item.amountCents)));
+  const stmtOperationalPendingAbs = totalCents(stmtOperationalPending.map((item) => absoluteCents(item.amountCents)));
+  const stmtOperationalValuePct = percentage(stmtOperationalCoveredAbs, stmtOperationalTotalAbs);
+
+  // 3. Statement Total Coverage (Extrato Total, todos os movimentos transacionais do extrato)
+  const stmtTotalTransactions = transactions.filter((item) => item.source === "BANK");
+  const stmtTotalCovered = stmtTotalTransactions.filter((item) => coveredStatuses.has(item.status));
+  const stmtTotalPending = stmtTotalTransactions.filter(
+    (item) => !coveredStatuses.has(item.status) && item.status !== "EXCLUDED_AUTO_APPLICATION",
+  );
+  const stmtTotalCoveredLines = stmtTotalCovered.length;
+  const stmtTotalTotalLines = stmtTotalTransactions.length;
+  const stmtTotalPendingLines = stmtTotalPending.length;
+  const stmtTotalLinePct = percentage(BigInt(stmtTotalCoveredLines), BigInt(stmtTotalTotalLines));
+  const stmtTotalCoveredAbs = totalCents(stmtTotalCovered.map((item) => absoluteCents(item.amountCents)));
+  const stmtTotalTotalAbs = totalCents(stmtTotalTransactions.map((item) => absoluteCents(item.amountCents)));
+  const stmtTotalPendingAbs = totalCents(stmtTotalPending.map((item) => absoluteCents(item.amountCents)));
+  const stmtTotalValuePct = percentage(stmtTotalCoveredAbs, stmtTotalTotalAbs);
+
+  // 4. Overall Operational Coverage (Geral Operacional: Razão + Extrato Operacional)
+  const overallOperationalTotalLines = ledgerTotalLines + stmtOperationalTotalLines;
+  const overallOperationalCoveredLines = ledgerCoveredLines + stmtOperationalCoveredLines;
+  const overallOperationalPendingLines = ledgerPendingLines + stmtOperationalPendingLines;
+  const overallOperationalLinePct = percentage(
+    BigInt(overallOperationalCoveredLines),
+    BigInt(overallOperationalTotalLines),
+  );
+  const overallOperationalTotalAbs = ledgerTotalAbs + stmtOperationalTotalAbs;
+  const overallOperationalCoveredAbs = ledgerCoveredAbs + stmtOperationalCoveredAbs;
+  const overallOperationalPendingAbs = ledgerPendingAbs + stmtOperationalPendingAbs;
+  const overallOperationalValuePct = percentage(overallOperationalCoveredAbs, overallOperationalTotalAbs);
+
   const counts = new Map<ResultStatus, bigint>();
   for (const result of results) counts.set(result.status, (counts.get(result.status) ?? 0n) + 1n);
   const pending = new Map<string, { bankCount: bigint; ledgerCount: bigint; bankValue: bigint; ledgerValue: bigint }>();
@@ -463,14 +525,146 @@ function consolidatedControls(
     balances,
     coverage: {
       lines: {
-        covered: String(coveredTransactions.length),
-        total: String(coverageTransactions.length),
-        percentage: percentage(BigInt(coveredTransactions.length), BigInt(coverageTransactions.length)),
+        covered: String(overallOperationalCoveredLines),
+        total: String(overallOperationalTotalLines),
+        pending: String(overallOperationalPendingLines),
+        percentage: overallOperationalLinePct,
+        formula: "(razão conciliado + extrato operacional conciliado) / (razão elegível + extrato operacional elegível)",
+        label: "Cobertura geral operacional",
       },
       absoluteValue: {
-        covered: centsToDecimal(coveredAbsolute.toString()),
-        total: centsToDecimal(totalAbsolute.toString()),
-        percentage: percentage(coveredAbsolute, totalAbsolute),
+        covered: centsToDecimal(overallOperationalCoveredAbs.toString()),
+        total: centsToDecimal(overallOperationalTotalAbs.toString()),
+        pending: centsToDecimal(overallOperationalPendingAbs.toString()),
+        percentage: overallOperationalValuePct,
+        formula: "(valor razão conciliado + valor extrato operacional conciliado) / valor elegível total",
+        label: "Cobertura geral operacional de valor",
+      },
+      ledger: {
+        lines: {
+          covered: String(ledgerCoveredLines),
+          total: String(ledgerTotalLines),
+          pending: String(ledgerPendingLines),
+          percentage: ledgerLinePct,
+          formula: "linhas do razão conciliadas / linhas elegíveis do razão",
+          label: "Cobertura do razão",
+        },
+        absoluteValue: {
+          covered: centsToDecimal(ledgerCoveredAbs.toString()),
+          total: centsToDecimal(ledgerTotalAbs.toString()),
+          pending: centsToDecimal(ledgerPendingAbs.toString()),
+          percentage: ledgerValuePct,
+          formula: "valor absoluto do razão conciliado / valor absoluto elegível do razão",
+          label: "Cobertura de valor do razão",
+        },
+      },
+      statementOperational: {
+        lines: {
+          covered: String(stmtOperationalCoveredLines),
+          total: String(stmtOperationalTotalLines),
+          pending: String(stmtOperationalPendingLines),
+          percentage: stmtOperationalLinePct,
+          formula: "linhas operacionais do extrato conciliadas / linhas operacionais elegíveis",
+          label: "Cobertura do extrato operacional",
+        },
+        absoluteValue: {
+          covered: centsToDecimal(stmtOperationalCoveredAbs.toString()),
+          total: centsToDecimal(stmtOperationalTotalAbs.toString()),
+          pending: centsToDecimal(stmtOperationalPendingAbs.toString()),
+          percentage: stmtOperationalValuePct,
+          formula: "valor absoluto operacional conciliado / valor absoluto operacional elegível",
+          label: "Cobertura de valor do extrato operacional",
+        },
+      },
+      statementTotal: {
+        lines: {
+          covered: String(stmtTotalCoveredLines),
+          total: String(stmtTotalTotalLines),
+          pending: String(stmtTotalPendingLines),
+          percentage: stmtTotalLinePct,
+          formula: "linhas do extrato conciliadas / total de movimentos transacionais do extrato",
+          label: "Cobertura do extrato total",
+        },
+        absoluteValue: {
+          covered: centsToDecimal(stmtTotalCoveredAbs.toString()),
+          total: centsToDecimal(stmtTotalTotalAbs.toString()),
+          pending: centsToDecimal(stmtTotalPendingAbs.toString()),
+          percentage: stmtTotalValuePct,
+          formula: "valor absoluto conciliado do extrato / valor absoluto transacional total do extrato",
+          label: "Cobertura de valor do extrato total",
+        },
+      },
+      overallOperational: {
+        lines: {
+          covered: String(overallOperationalCoveredLines),
+          total: String(overallOperationalTotalLines),
+          pending: String(overallOperationalPendingLines),
+          percentage: overallOperationalLinePct,
+          formula: "(razão conciliado + extrato operacional conciliado) / (razão elegível + extrato operacional elegível)",
+          label: "Cobertura geral operacional",
+        },
+        absoluteValue: {
+          covered: centsToDecimal(overallOperationalCoveredAbs.toString()),
+          total: centsToDecimal(overallOperationalTotalAbs.toString()),
+          pending: centsToDecimal(overallOperationalPendingAbs.toString()),
+          percentage: overallOperationalValuePct,
+          formula: "(valor razão conciliado + valor extrato operacional conciliado) / valor elegível total",
+          label: "Cobertura geral operacional de valor",
+        },
+      },
+      statement: {
+        lines: {
+          covered: String(stmtTotalCoveredLines),
+          total: String(stmtTotalTotalLines),
+          pending: String(stmtTotalPendingLines),
+          percentage: stmtTotalLinePct,
+          formula: "linhas do extrato conciliadas / total de movimentos transacionais do extrato",
+          label: "Cobertura do extrato total",
+        },
+        absoluteValue: {
+          covered: centsToDecimal(stmtTotalCoveredAbs.toString()),
+          total: centsToDecimal(stmtTotalTotalAbs.toString()),
+          pending: centsToDecimal(stmtTotalPendingAbs.toString()),
+          percentage: stmtTotalValuePct,
+          formula: "valor absoluto conciliado do extrato / valor absoluto transacional total do extrato",
+          label: "Cobertura de valor do extrato total",
+        },
+      },
+      operational: {
+        lines: {
+          covered: String(stmtOperationalCoveredLines),
+          total: String(stmtOperationalTotalLines),
+          pending: String(stmtOperationalPendingLines),
+          percentage: stmtOperationalLinePct,
+          formula: "linhas operacionais do extrato conciliadas / linhas operacionais elegíveis",
+          label: "Cobertura do extrato operacional",
+        },
+        absoluteValue: {
+          covered: centsToDecimal(stmtOperationalCoveredAbs.toString()),
+          total: centsToDecimal(stmtOperationalTotalAbs.toString()),
+          pending: centsToDecimal(stmtOperationalPendingAbs.toString()),
+          percentage: stmtOperationalValuePct,
+          formula: "valor absoluto operacional conciliado / valor absoluto operacional elegível",
+          label: "Cobertura de valor do extrato operacional",
+        },
+      },
+      overall: {
+        lines: {
+          covered: String(overallOperationalCoveredLines),
+          total: String(overallOperationalTotalLines),
+          pending: String(overallOperationalPendingLines),
+          percentage: overallOperationalLinePct,
+          formula: "(razão conciliado + extrato operacional conciliado) / (razão elegível + extrato operacional elegível)",
+          label: "Cobertura geral operacional",
+        },
+        absoluteValue: {
+          covered: centsToDecimal(overallOperationalCoveredAbs.toString()),
+          total: centsToDecimal(overallOperationalTotalAbs.toString()),
+          pending: centsToDecimal(overallOperationalPendingAbs.toString()),
+          percentage: overallOperationalValuePct,
+          formula: "(valor razão conciliado + valor extrato operacional conciliado) / valor elegível total",
+          label: "Cobertura geral operacional de valor",
+        },
       },
     },
     countsByStatus: resultStatuses
@@ -620,3 +814,317 @@ function maximumMatching(leftIds: readonly string[], pairs: ReadonlyArray<readon
   for (const leftId of [...leftIds].sort()) tryAugment(leftId, new Set());
   return new Map([...leftByRight.entries()].map(([rightId, leftId]) => [leftId, rightId]));
 }
+
+export interface CandidateDiagnosticStatement {
+  source: "statement";
+  originalRowIndex: number;
+  parsedDate: string;
+  rawDescription: string;
+  normalizedDescription: string;
+  extractedDocument: string | null;
+  normalizedDocument: string | null;
+  rawAmount: string;
+  parsedAmountCents: string;
+  sign: "positive" | "negative";
+  eligibility: string;
+  category: string;
+  bankHint?: string | null | undefined;
+  finalStatus: string;
+}
+
+export interface CandidateDiagnosticLedger {
+  source: "ledger";
+  originalRowIndex: number;
+  parsedDate: string;
+  rawHistory: string;
+  normalizedHistory: string;
+  extractedDocument: string | null;
+  normalizedDocument: string | null;
+  debitCents: string;
+  creditCents: string;
+  parsedAmountCents: string;
+  sign: "positive" | "negative";
+  accountingAccount: string;
+  counterpartyAccount: string | null;
+  category: string;
+  bankHint?: string | null | undefined;
+  eligibility: string;
+  finalStatus: string;
+}
+
+export interface CandidateCompetingEntry {
+  source: "ledger" | "statement";
+  date: string;
+  description: string;
+  amountCents: string;
+  normalizedDocument?: string | undefined;
+  semanticCategory?: string | undefined;
+  bankHint?: string | undefined;
+  score: number;
+  rejectionReason?: string | undefined;
+}
+
+export interface CandidateComparisonDiagnostic {
+  statementLine: string;
+  ledgerLine: string;
+  sameDate: boolean;
+  dateDiffDays: number;
+  sameAmount: boolean;
+  sameAbsAmount: boolean;
+  sameSignAfterConvention: boolean;
+  documentCompatible: boolean;
+  descriptionCompatible: boolean;
+  semanticCategoryCompatible: boolean;
+  bankHintCompatible?: boolean | undefined;
+  wasCandidateGenerated: boolean;
+  score?: CandidateScoreBreakdown | undefined;
+  competingCandidates?: CandidateCompetingEntry[] | undefined;
+  rejectedByRule?: string | undefined;
+  rejectionReason?: string | undefined;
+  finalDecision: "MATCHED" | "REJECTED" | "AMBIGUOUS" | "NOT_CANDIDATE";
+}
+
+export interface CandidateDiagnosticTraceOutput {
+  statement?: CandidateDiagnosticStatement | undefined;
+  ledger?: CandidateDiagnosticLedger | undefined;
+  candidateComparison: CandidateComparisonDiagnostic;
+}
+
+export interface CandidateDiagnosticTraceInput {
+  statementRecord?: StatementRecord | undefined;
+  ledgerRecord?: LedgerRecord | undefined;
+  statementLine?: string | undefined;
+  ledgerLine?: string | undefined;
+  statementHint?: string | undefined;
+  ledgerHint?: string | undefined;
+  amountCents?: string | undefined;
+  date?: string | undefined;
+  signProfile?: AccountMapping["signProfile"] | undefined;
+  dateToleranceDays?: number | undefined;
+  competingLedgers?: LedgerRecord[] | undefined;
+  competingStatements?: StatementRecord[] | undefined;
+  hasAmbiguity?: boolean | undefined;
+}
+
+export function traceReconciliationCandidate(input: CandidateDiagnosticTraceInput): CandidateDiagnosticTraceOutput {
+  const stmt = input.statementRecord;
+  const ldg = input.ledgerRecord;
+  const signProfile = input.signProfile ?? "BANK_LIABILITY";
+  const dateTolerance = input.dateToleranceDays ?? 2;
+
+  let stmtDiag: CandidateDiagnosticStatement | undefined;
+  if (stmt) {
+    const stmtCents = decimalToCents(stmt.value);
+    const stmtTokens = normalizeReconciliationText(stmt.history);
+    const stmtCategories = extractSemanticCategories(stmt.history);
+    const stmtBank = extractBankHint(stmt.history);
+    const normDoc = stmt.document ? normalizeDocumentId(stmt.document) : null;
+    stmtDiag = {
+      source: "statement",
+      originalRowIndex: stmt.evidence.line ?? 0,
+      parsedDate: stmt.date,
+      rawDescription: stmt.history,
+      normalizedDescription: stmtTokens.join(" "),
+      extractedDocument: stmt.document || null,
+      normalizedDocument: normDoc,
+      rawAmount: stmt.value,
+      parsedAmountCents: stmtCents.toString(),
+      sign: stmtCents >= 0n ? "positive" : "negative",
+      eligibility: eligibleStatement(stmt) ? "ELIGIBLE" : "INELIGIBLE",
+      category: stmtCategories.join(", ") || "OTHER",
+      ...(stmtBank ? { bankHint: stmtBank } : { bankHint: null }),
+      finalStatus: "PENDING_EVALUATION",
+    };
+  }
+
+  let ldgDiag: CandidateDiagnosticLedger | undefined;
+  if (ldg) {
+    const ldgRawCents = decimalToCents(ldg.value);
+    const ldgMultipliedCents = ldgRawCents * signConvention(signProfile).ledgerMovementMultiplier;
+    const ldgTokens = normalizeReconciliationText(ldg.history);
+    const ldgCategories = extractSemanticCategories(ldg.history);
+    const ldgBank = extractBankHint(ldg.history);
+    const normDoc = ldg.document ? normalizeDocumentId(ldg.document) : null;
+    ldgDiag = {
+      source: "ledger",
+      originalRowIndex: ldg.evidence.line ?? 0,
+      parsedDate: ldg.date,
+      rawHistory: ldg.history,
+      normalizedHistory: ldgTokens.join(" "),
+      extractedDocument: ldg.document || null,
+      normalizedDocument: normDoc,
+      debitCents: ldgRawCents > 0n ? ldgRawCents.toString() : "0",
+      creditCents: ldgRawCents < 0n ? (-ldgRawCents).toString() : "0",
+      parsedAmountCents: ldgMultipliedCents.toString(),
+      sign: ldgMultipliedCents >= 0n ? "positive" : "negative",
+      accountingAccount: ldg.ledgerAccount,
+      counterpartyAccount: null,
+      category: ldgCategories.join(", ") || "OTHER",
+      ...(ldgBank ? { bankHint: ldgBank } : { bankHint: null }),
+      eligibility: eligibleLedger(ldg) ? "ELIGIBLE" : "INELIGIBLE",
+      finalStatus: "PENDING_EVALUATION",
+    };
+  }
+
+  const stmtLine = input.statementLine ?? (stmt ? `${stmt.date} - ${stmt.history} - R$ ${stmt.value}` : (input.statementHint ?? ""));
+  const ldgLine = input.ledgerLine ?? (ldg ? `${ldg.date} - ${ldg.history} - R$ ${ldg.value}` : (input.ledgerHint ?? ""));
+
+  let sameDate = false;
+  let dateDiff = 999;
+  let sameAmount = false;
+  let sameAbsAmount = false;
+  let sameSignAfterConvention = false;
+  let documentCompatible = false;
+  let descriptionCompatible = false;
+  let semanticCategoryCompatible = false;
+  let bankHintCompatible = false;
+  let wasCandidateGenerated = false;
+  let scoreBreakdown: CandidateScoreBreakdown | undefined;
+  let competingList: CandidateCompetingEntry[] | undefined;
+  let rejectedByRule: string | undefined;
+  let rejectionReason: string | undefined;
+  let finalDecision: "MATCHED" | "REJECTED" | "AMBIGUOUS" | "NOT_CANDIDATE" = "NOT_CANDIDATE";
+
+  if (stmt && ldg) {
+    sameDate = stmt.date === ldg.date;
+    dateDiff = dayDifference(stmt.date, ldg.date);
+    const stmtCents = decimalToCents(stmt.value);
+    const ldgCents = decimalToCents(ldg.value) * signConvention(signProfile).ledgerMovementMultiplier;
+    sameAmount = stmtCents === ldgCents;
+    sameAbsAmount = absoluteCents(stmtCents.toString()) === absoluteCents(ldgCents.toString());
+    sameSignAfterConvention = (stmtCents >= 0n && ldgCents >= 0n) || (stmtCents < 0n && ldgCents < 0n);
+
+    const stmtNormDoc = normalizeDocumentId(stmt.document || "");
+    const ldgNormDoc = normalizeDocumentId(ldg.document || "");
+    const stmtHint = extractFinancialHint(stmt.history, stmtNormDoc);
+    const ldgHint = extractFinancialHint(ldg.history, ldgNormDoc);
+
+    if (stmtNormDoc && ldgNormDoc && stmtNormDoc === ldgNormDoc) {
+      documentCompatible = true;
+    } else if (stmtHint.comparisonTokens.some((t) => ldgHint.comparisonTokens.includes(t) && /^\d+$/.test(t))) {
+      documentCompatible = true;
+    }
+
+    const similarity = reconciliationTextSimilarity(stmtHint.comparisonTokens, ldgHint.comparisonTokens);
+    descriptionCompatible = similarity >= 0.3 || documentCompatible;
+
+    const stmtCats = extractSemanticCategories(stmt.history);
+    const ldgCats = extractSemanticCategories(ldg.history);
+    semanticCategoryCompatible = stmtCats.some((c) => ldgCats.includes(c)) || (stmtCats.length === 0 && ldgCats.length === 0);
+
+    const stmtBank = extractBankHint(stmt.history);
+    const ldgBank = extractBankHint(ldg.history);
+    bankHintCompatible = Boolean(stmtBank && ldgBank && stmtBank === ldgBank);
+
+    wasCandidateGenerated = (sameDate || dateDiff <= dateTolerance) && (sameAmount || sameAbsAmount);
+
+    let hasAmbiguity = Boolean(input.hasAmbiguity);
+    if (input.competingLedgers && input.competingLedgers.length > 0) {
+      competingList = [];
+      const evaluated = [ldg, ...input.competingLedgers];
+      const scores: number[] = [];
+      for (const comp of evaluated) {
+        const compCents = decimalToCents(comp.value) * signConvention(signProfile).ledgerMovementMultiplier;
+        const compScore = calculateCandidateScore({
+          statementDate: stmt.date,
+          ledgerDate: comp.date,
+          statementAmountCents: stmtCents,
+          ledgerAmountCents: compCents,
+          statementDescription: stmt.history,
+          ledgerHistory: comp.history,
+          statementDocument: stmt.document,
+          ledgerDocument: comp.document,
+          dateToleranceDays: dateTolerance,
+        });
+        scores.push(compScore.total);
+        competingList.push({
+          source: "ledger",
+          date: comp.date,
+          description: comp.history,
+          amountCents: compCents.toString(),
+          normalizedDocument: comp.document ? normalizeDocumentId(comp.document) : undefined,
+          semanticCategory: extractSemanticCategories(comp.history)[0],
+          bankHint: extractBankHint(comp.history),
+          score: compScore.total,
+          rejectionReason: compScore.decision !== "MATCH" ? compScore.evidence.join("; ") : undefined,
+        });
+      }
+      const topScore = Math.max(...scores);
+      const topCount = scores.filter((s) => s === topScore).length;
+      if (topCount > 1 && !stmtNormDoc) {
+        hasAmbiguity = true;
+      }
+    }
+
+    scoreBreakdown = calculateCandidateScore({
+      statementDate: stmt.date,
+      ledgerDate: ldg.date,
+      statementAmountCents: stmtCents,
+      ledgerAmountCents: ldgCents,
+      statementDescription: stmt.history,
+      ledgerHistory: ldg.history,
+      statementDocument: stmt.document,
+      ledgerDocument: ldg.document,
+      dateToleranceDays: dateTolerance,
+      hasAmbiguity,
+    });
+
+    if (scoreBreakdown.decision === "MATCH") {
+      finalDecision = "MATCHED";
+      if (sameDate && (sameAmount || documentCompatible)) {
+        if (stmtDiag) stmtDiag.finalStatus = "AUTO_MATCH_EXACT";
+        if (ldgDiag) ldgDiag.finalStatus = "AUTO_MATCH_EXACT";
+      } else {
+        if (stmtDiag) stmtDiag.finalStatus = "AUTO_MATCH_DATE_TOLERANCE";
+        if (ldgDiag) ldgDiag.finalStatus = "AUTO_MATCH_DATE_TOLERANCE";
+      }
+    } else if (scoreBreakdown.decision === "AMBIGUOUS") {
+      finalDecision = "AMBIGUOUS";
+      rejectedByRule = "AMBIGUITY";
+      rejectionReason = "Múltiplos candidatos equivalentes sem documento desempate.";
+      if (stmtDiag) stmtDiag.finalStatus = "AMBIGUOUS_CANDIDATE";
+      if (ldgDiag) ldgDiag.finalStatus = "AMBIGUOUS_CANDIDATE";
+    } else if (!sameSignAfterConvention) {
+      finalDecision = "REJECTED";
+      rejectedByRule = "SIGN_CONVENTION";
+      rejectionReason = "Os sinais de débito/crédito não coincidem após a convenção contábil aplicada.";
+    } else if (dateDiff > dateTolerance) {
+      finalDecision = "REJECTED";
+      rejectedByRule = "DATE_TOLERANCE";
+      rejectionReason = `A diferença de datas (${dateDiff} dias) excede a tolerância de ${dateTolerance} dias.`;
+    } else if (stmtNormDoc && ldgNormDoc && stmtNormDoc !== ldgNormDoc) {
+      finalDecision = "REJECTED";
+      rejectedByRule = "DOCUMENT_MISMATCH";
+      rejectionReason = `Documento divergente entre extrato [${stmtNormDoc}] e razão [${ldgNormDoc}].`;
+    } else {
+      finalDecision = "REJECTED";
+      rejectedByRule = "RF-09";
+      rejectionReason = "Valores ou critérios semânticos insuficientes para conciliação automática.";
+    }
+  }
+
+  return {
+    statement: stmtDiag,
+    ledger: ldgDiag,
+    candidateComparison: {
+      statementLine: stmtLine,
+      ledgerLine: ldgLine,
+      sameDate,
+      dateDiffDays: dateDiff,
+      sameAmount,
+      sameAbsAmount,
+      sameSignAfterConvention,
+      documentCompatible,
+      descriptionCompatible,
+      semanticCategoryCompatible,
+      bankHintCompatible,
+      wasCandidateGenerated,
+      score: scoreBreakdown,
+      ...(competingList ? { competingCandidates: competingList } : {}),
+      ...(rejectedByRule ? { rejectedByRule } : {}),
+      ...(rejectionReason ? { rejectionReason } : {}),
+      finalDecision,
+    },
+  };
+}
+

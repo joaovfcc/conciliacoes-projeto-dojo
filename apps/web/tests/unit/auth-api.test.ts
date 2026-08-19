@@ -81,13 +81,21 @@ describe("authentication HTTP handlers", () => {
     const auth = new FakeWebAuthService();
     const rateLimiter = new FakeRateLimiter();
     rateLimiter.allowed = false;
+    rateLimiter.retryAfterSeconds = 300;
     const response = await createAuthHandlers(dependencies(auth, rateLimiter)).login(request("/api/auth/login", {
       email: " OWNER@Example.COM ",
       password: "correct-password",
     }));
 
     expect(response.status).toBe(429);
-    expect(response.headers.get("retry-after")).toBe("60");
+    expect(response.headers.get("retry-after")).toBe("300");
+    expect(await response.json()).toEqual({
+      error: {
+        code: "RATE_LIMITED",
+        message: "Limite de 5 tentativas excedido. Aguarde 5 minutos em standby antes de tentar novamente.",
+        retryAfterSeconds: 300,
+      },
+    });
     expect(rateLimiter.keys).toEqual(["ip:direct"]);
     expect(auth.loginCalls).toBe(0);
   });
@@ -103,7 +111,11 @@ describe("authentication HTTP handlers", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("retry-after")).toBe("60");
     expect(await response.json()).toEqual({
-      error: { code: "RATE_LIMIT_UNAVAILABLE", message: "Proteção contra abuso indisponível" },
+      error: {
+        code: "RATE_LIMIT_UNAVAILABLE",
+        message: "Proteção contra abuso indisponível",
+        retryAfterSeconds: 60,
+      },
     });
   });
 
@@ -176,11 +188,12 @@ class FakeRateLimiter {
   allowed = true;
   keys: string[] = [];
   failure?: Error;
+  retryAfterSeconds = 300;
 
   async consume(_policy: { limit: number }, key: string) {
     if (this.failure) throw this.failure;
     this.keys.push(key);
-    return { allowed: this.allowed, remaining: this.allowed ? 1 : 0, retryAfterSeconds: 60 };
+    return { allowed: this.allowed, remaining: this.allowed ? 1 : 0, retryAfterSeconds: this.retryAfterSeconds };
   }
 }
 

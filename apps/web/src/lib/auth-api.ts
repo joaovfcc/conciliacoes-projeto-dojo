@@ -36,7 +36,7 @@ export interface AuthHttpDependencies {
   rateLimiter: RateLimiter;
 }
 
-const loginPolicy: RateLimitPolicy = { name: "auth-login", limit: 5, windowMs: 15 * 60 * 1000 };
+const loginPolicy: RateLimitPolicy = { name: "auth-login", limit: 5, windowMs: 5 * 60 * 1000 };
 const refreshPolicy: RateLimitPolicy = { name: "auth-refresh", limit: 30, windowMs: 5 * 60 * 1000 };
 const passwordPolicy: RateLimitPolicy = { name: "auth-password", limit: 5, windowMs: 60 * 60 * 1000 };
 
@@ -143,7 +143,7 @@ async function handle(action: () => Promise<Response>): Promise<Response> {
 function errorResponse(status: number, code: string, message: string, retryAfterSeconds?: number): NextResponse {
   const headers = new Headers(noStoreHeaders());
   if (retryAfterSeconds !== undefined) headers.set("Retry-After", String(retryAfterSeconds));
-  return NextResponse.json({ error: { code, message } }, { status, headers });
+  return NextResponse.json({ error: { code, message, ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}) } }, { status, headers });
 }
 
 function noStoreJson(body: unknown): NextResponse {
@@ -177,10 +177,15 @@ async function consumeLimit(limiter: RateLimiter, policy: RateLimitPolicy, key: 
   try {
     const result = await limiter.consume(policy, key);
     if (!result.allowed) {
+      const minutes = Math.ceil(result.retryAfterSeconds / 60);
+      const timeDescription =
+        result.retryAfterSeconds < 60
+          ? `${result.retryAfterSeconds} segundos`
+          : `${minutes} minuto${minutes === 1 ? "" : "s"}`;
       throw new AuthHttpError(
         429,
         "RATE_LIMITED",
-        `Tente novamente em ${result.retryAfterSeconds} segundos`,
+        `Limite de 5 tentativas excedido. Aguarde ${timeDescription} em standby antes de tentar novamente.`,
         result.retryAfterSeconds,
       );
     }

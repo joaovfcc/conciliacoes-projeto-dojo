@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeDocumentId } from "../../normalization.js";
 
 export const RECONCILIATION_RULE_VERSION = "1.0" as const;
 
@@ -20,7 +21,7 @@ export interface ReconciliationConfigurationV1 {
     allLinesNumericTokenBonus: 1.5;
   };
   maxCombinationsPerAnchor: 100;
-  automaticApplicationPattern: "^(APL|RES) APLIC AUT";
+  automaticApplicationPattern: string;
 }
 
 export const RECONCILIATION_CONFIGURATION_V1: ReconciliationConfigurationV1 = Object.freeze({
@@ -35,7 +36,7 @@ export const RECONCILIATION_CONFIGURATION_V1: ReconciliationConfigurationV1 = Ob
     allLinesNumericTokenBonus: 1.5,
   }),
   maxCombinationsPerAnchor: 100,
-  automaticApplicationPattern: "^(APL|RES) APLIC AUT",
+  automaticApplicationPattern: "^(APL|RES)\\s+APLIC\\s+AUT|.*CONTAMAX.*|^(?:APLICACAO|APLIC|RESGATE|RESG)\\s+(?:AUT|AUTOMATICA|AUTOMATICO)\\b",
 });
 
 export type ReconciliationSource = "BANK" | "LEDGER";
@@ -163,12 +164,273 @@ type GroupCandidate = {
 const EPOCH = "1970-01-01T00:00:00.000Z";
 const DAY_MS = 86_400_000;
 
+export const SEMANTIC_CATEGORY_PATTERNS: Array<{ category: string; pattern: RegExp }> = [
+  {
+    category: "PAYMENT_TITLE",
+    pattern: /\b(?:PGTO|PAGTO|PAGAMENTO|PAGAMENTOS|BAIXA\s+TIT|BAIXA\s+TITULO|BAIXA\s+DE\s+TITULO|LIQ\s+TIT|LIQUIDACAO\s+TITULO|LIQ\s+TITULOS|LIQUIDACAO\s+TITULOS|SISPAG)\b/i,
+  },
+  {
+    category: "BANK_FEE",
+    pattern: /\b(?:TAR\s+BANC|TARIFA\s+BANCARIA|TAR\s+BANCARIA|DESP\s+BANC|DESPESA\s+BANCARIA|TARIFA\s+MENSALIDADE|MANUTENCAO\s+CONV|MANUT\s+CTA)\b/i,
+  },
+  {
+    category: "TRANSFER",
+    pattern: /\b(?:TRANSF|TRANSFERENCIA|TED|DOC|PIX\s+TRANSF|PIX\s+TRANSF\s+ENVIADA|PIX\s+ENVIADO)\b/i,
+  },
+  {
+    category: "INCOMING_TRANSFER",
+    pattern: /\b(?:PIX\s+RECEBIDO|REC\s+PIX|TRANSF\s+RECEBIDA|TED\s+RECEBIDA|DOC\s+RECEBIDO)\b/i,
+  },
+];
+
+export const BANK_HINT_PATTERNS: Array<{ bank: string; pattern: RegExp }> = [
+  { bank: "ITAU", pattern: /\b(?:ITAU|UNIBANCO|ITAUUNIBANCO|341)\b/i },
+  { bank: "SANTANDER", pattern: /\b(?:SANTANDER|BANCO\s+SANTANDER|033)\b/i },
+  { bank: "BRADESCO", pattern: /\b(?:BRADESCO|BRADESCO\s+BANK|237)\b/i },
+  { bank: "BANCO_DO_BRASIL", pattern: /\b(?:BANCO\s+DO\s+BRASIL|BCO\s+BRASIL|BBRASIL|001)\b/i },
+  { bank: "CAIXA", pattern: /\b(?:CAIXA|CEF|CAIXA\s+ECONOMICA|104)\b/i },
+  { bank: "SAFRA", pattern: /\b(?:SAFRA|BANCO\s+SAFRA|422)\b/i },
+  { bank: "DAYCOVAL", pattern: /\b(?:DAYCOVAL|BANCO\s+DAYCOVAL|707)\b/i },
+  { bank: "BTG", pattern: /\b(?:BTG|BTG\s+PACTUAL|208)\b/i },
+  { bank: "SICOOB", pattern: /\b(?:SICOOB|BANCOOB|756)\b/i },
+  { bank: "SICREDI", pattern: /\b(?:SICREDI|748)\b/i },
+  { bank: "INTER", pattern: /\b(?:BANCO\s+INTER|077)\b/i },
+  { bank: "C6", pattern: /\b(?:C6|C6\s+BANK|336)\b/i },
+  { bank: "NUBANK", pattern: /\b(?:NUBANK|NU\s+PAGAMENTOS|260)\b/i },
+  { bank: "BRB", pattern: /\b(?:BRB|BANCO\s+DE\s+BRASILIA|070)\b/i },
+];
+
+export function extractBankHint(text: string): string | undefined {
+  const normalized = normalizeCharacters(text);
+  for (const { bank, pattern } of BANK_HINT_PATTERNS) {
+    if (pattern.test(normalized)) return bank;
+  }
+  return undefined;
+}
+
+export type FinancialHint = {
+  bankHint?: string;
+  semanticCategory?: string;
+  documentId?: string;
+  comparisonTokens: string[];
+};
+
+export function extractFinancialHint(
+  text: string,
+  documentId?: string,
+  genericWords: readonly string[] = DEFAULT_GENERIC_WORDS,
+): FinancialHint {
+  const bankHint = extractBankHint(text);
+  const semanticCategories = extractSemanticCategories(text);
+  const semanticCategory = semanticCategories[0];
+  const wordTokens = normalizeReconciliationText(text, genericWords);
+  const docTokens = documentId ? [documentId] : [];
+  const bankTokens = bankHint ? [bankHint] : [];
+  const comparisonTokens = [
+    ...new Set([...semanticCategories, ...bankTokens, ...docTokens, ...wordTokens]),
+  ];
+  return {
+    ...(bankHint ? { bankHint } : {}),
+    ...(semanticCategory ? { semanticCategory } : {}),
+    ...(documentId ? { documentId } : {}),
+    comparisonTokens,
+  };
+}
+
+export interface CandidateScoreBreakdown {
+  dateExact: number;
+  dateTolerance: number;
+  amountExact: number;
+  signedAmountCompatible: number;
+  documentExact: number;
+  documentNormalized: number;
+  semanticCategory: number;
+  bankHint: number;
+  descriptionSimilarity: number;
+  ambiguityPenalty: number;
+  total: number;
+  decision: "MATCH" | "AMBIGUOUS" | "REJECT";
+  evidence: string[];
+}
+
+export interface CandidateScoringInput {
+  statementDate: string;
+  ledgerDate: string;
+  statementAmountCents: bigint;
+  ledgerAmountCents: bigint;
+  statementDescription: string;
+  ledgerHistory: string;
+  statementDocument?: string;
+  ledgerDocument?: string;
+  dateToleranceDays?: number;
+  hasAmbiguity?: boolean;
+}
+
+export function calculateCandidateScore(input: CandidateScoringInput): CandidateScoreBreakdown {
+  const dateTolerance = input.dateToleranceDays ?? 2;
+  const evidence: string[] = [];
+
+  // 1. Date
+  let dateExact = 0;
+  let dateTolScore = 0;
+  const stmtDateEpoch = Date.parse(`${input.statementDate}T00:00:00Z`);
+  const ldgDateEpoch = Date.parse(`${input.ledgerDate}T00:00:00Z`);
+  const dateDiffDays = Math.round(Math.abs(stmtDateEpoch - ldgDateEpoch) / DAY_MS);
+
+  if (input.statementDate === input.ledgerDate) {
+    dateExact = 25;
+    evidence.push("Data exata (+25)");
+  } else if (dateDiffDays <= dateTolerance) {
+    dateTolScore = 15;
+    evidence.push(`Data na janela de tolerância de ${dateDiffDays} dias (+15)`);
+  } else {
+    evidence.push(`Data fora da tolerância: ${dateDiffDays} dias (0)`);
+  }
+
+  // 2. Amount & Sign
+  let amountExact = 0;
+  let signedAmountCompatible = 0;
+  const sameAmount = input.statementAmountCents === input.ledgerAmountCents;
+  const absStmt = input.statementAmountCents < 0n ? -input.statementAmountCents : input.statementAmountCents;
+  const absLdg = input.ledgerAmountCents < 0n ? -input.ledgerAmountCents : input.ledgerAmountCents;
+  const sameAbsAmount = absStmt === absLdg;
+
+  if (sameAmount) {
+    amountExact = 30;
+    signedAmountCompatible = 10;
+    evidence.push("Valor e sinal compatíveis (+40)");
+  } else if (sameAbsAmount) {
+    amountExact = 30;
+    signedAmountCompatible = -30;
+    evidence.push("Sinal invertido após convenção (-30)");
+  } else {
+    evidence.push("Valor em centavos divergente");
+  }
+
+  // 3. Document
+  let documentExact = 0;
+  let documentNormalized = 0;
+  const rawStmtDoc = (input.statementDocument ?? "").trim();
+  const rawLdgDoc = (input.ledgerDocument ?? "").trim();
+  const normStmtDoc = normalizeDocumentId(rawStmtDoc);
+  const normLdgDoc = normalizeDocumentId(rawLdgDoc);
+
+  if (normStmtDoc && normLdgDoc && normStmtDoc === normLdgDoc) {
+    if (rawStmtDoc === rawLdgDoc) {
+      documentExact = 40;
+      evidence.push(`Documento literal exato [${rawStmtDoc}] (+40)`);
+    } else {
+      documentNormalized = 40;
+      evidence.push(`Documento normalizado compatível [${normStmtDoc}] (+40)`);
+    }
+  } else if (normStmtDoc && normLdgDoc && normStmtDoc !== normLdgDoc) {
+    documentNormalized = -30;
+    evidence.push(`Documento divergente [${normStmtDoc} vs ${normLdgDoc}] (-30)`);
+  } else if (normStmtDoc || normLdgDoc) {
+    evidence.push("Documento presente em apenas um dos lados (0)");
+  }
+
+  // 4. Semantic Category
+  let semanticCategory = 0;
+  const stmtCats = extractSemanticCategories(input.statementDescription);
+  const ldgCats = extractSemanticCategories(input.ledgerHistory);
+  if (stmtCats.some((cat) => ldgCats.includes(cat))) {
+    semanticCategory = 20;
+    evidence.push(`Categoria semântica compatível [${stmtCats.filter((c) => ldgCats.includes(c)).join(", ")}] (+20)`);
+  } else if (stmtCats.length > 0 && ldgCats.length > 0) {
+    semanticCategory = -25;
+    evidence.push(`Categorias semânticas divergentes [${stmtCats.join(",")} vs ${ldgCats.join(",")}] (-25)`);
+  }
+
+  // 5. Bank Hint
+  let bankHint = 0;
+  const stmtBank = extractBankHint(input.statementDescription);
+  const ldgBank = extractBankHint(input.ledgerHistory);
+  if (stmtBank && ldgBank && stmtBank === ldgBank) {
+    bankHint = 10;
+    evidence.push(`Banco compatível no histórico [${stmtBank}] (+10)`);
+  } else if (stmtBank && ldgBank && stmtBank !== ldgBank) {
+    bankHint = -20;
+    evidence.push(`Bancos divergentes no histórico [${stmtBank} vs ${ldgBank}] (-20)`);
+  }
+
+  // 6. Text Similarity
+  let descriptionSimilarity = 0;
+  const stmtHint = extractFinancialHint(input.statementDescription, normStmtDoc);
+  const ldgHint = extractFinancialHint(input.ledgerHistory, normLdgDoc);
+  const similarity = reconciliationTextSimilarity(stmtHint.comparisonTokens, ldgHint.comparisonTokens);
+  if (similarity >= 0.3) {
+    descriptionSimilarity = Math.round(similarity * 15);
+    evidence.push(`Similaridade textual relevante [${Math.round(similarity * 100)}%] (+${descriptionSimilarity})`);
+  }
+
+  // 7. Ambiguity Penalty
+  let ambiguityPenalty = 0;
+  if (input.hasAmbiguity) {
+    ambiguityPenalty = -50;
+    evidence.push("Penalidade por concorrência de candidatos ambíguos (-50)");
+  }
+
+  const total =
+    dateExact +
+    dateTolScore +
+    amountExact +
+    signedAmountCompatible +
+    documentExact +
+    documentNormalized +
+    semanticCategory +
+    bankHint +
+    descriptionSimilarity +
+    ambiguityPenalty;
+
+  let decision: "MATCH" | "AMBIGUOUS" | "REJECT";
+  if (documentNormalized === -30 || signedAmountCompatible < 0 || dateDiffDays > dateTolerance || (!sameAmount && !sameAbsAmount)) {
+    decision = "REJECT";
+  } else if (input.hasAmbiguity || ambiguityPenalty < 0) {
+    decision = "AMBIGUOUS";
+  } else if (total >= 70 && sameAmount && (dateExact > 0 || dateTolScore > 0)) {
+    decision = "MATCH";
+  } else if (total >= 50 && sameAmount && (documentExact > 0 || documentNormalized > 0)) {
+    decision = "MATCH";
+  } else {
+    decision = "REJECT";
+  }
+
+  return {
+    dateExact,
+    dateTolerance: dateTolScore,
+    amountExact,
+    signedAmountCompatible,
+    documentExact,
+    documentNormalized,
+    semanticCategory,
+    bankHint,
+    descriptionSimilarity,
+    ambiguityPenalty,
+    total,
+    decision,
+    evidence,
+  };
+}
+
+
+export function extractSemanticCategories(text: string): string[] {
+  const normalized = normalizeCharacters(text);
+  const categories: string[] = [];
+  for (const { category, pattern } of SEMANTIC_CATEGORY_PATTERNS) {
+    if (pattern.test(normalized)) {
+      categories.push(category);
+    }
+  }
+  return categories;
+}
+
 export function normalizeReconciliationText(value: string, genericWords: readonly string[] = DEFAULT_GENERIC_WORDS): string[] {
   const generic = new Set(genericWords.map((word) => normalizeCharacters(word)));
   return normalizeCharacters(value)
     .split(" ")
     .filter((token) => token.length >= 3)
-    .map((token) => /^\d+$/.test(token) ? token.replace(/^0+(?=\d)/, "") : token)
+    .map((token) => (/^\d+$/.test(token) ? token.replace(/^0+(?=\d)/, "") : token))
     .filter((token) => !generic.has(token));
 }
 
@@ -316,6 +578,9 @@ export class ReconciliationEngine {
       const bank = residue.filter((item) => item.source === "BANK");
       const ledger = residue.filter((item) => item.source === "LEDGER");
       if (bank.length > 0 && ledger.length > 0 && total(bank) === total(ledger)) {
+        if (bank.length === 1 && ledger.length === 1 && hasDivergentDocument(bank[0]!, ledger[0]!)) {
+          continue;
+        }
         accept("RF-07", "daily-total", bank, ledger, "RECONCILED_DAILY_TOTAL");
       }
     }
@@ -414,15 +679,28 @@ export interface MatchResult {
 }
 
 function prepare(transaction: ReconciliationTransaction, configuration: ReconciliationConfigurationV1): PreparedTransaction {
-  const comparisonText = [transaction.description, transaction.documentId, transaction.counterparty, transaction.counterpart, transaction.ledgerCounterpartAccount]
-    .filter((value): value is string => Boolean(value)).join(" ");
+  const comparisonText = [
+    transaction.description,
+    transaction.documentId,
+    transaction.counterparty,
+    transaction.counterpart,
+    transaction.ledgerCounterpartAccount,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
   const tokens = normalizeReconciliationText(transaction.description, configuration.genericWords);
+  const normDoc = transaction.documentId ? normalizeDocumentId(transaction.documentId) : undefined;
+  const financialHint = extractFinancialHint(comparisonText, normDoc, configuration.genericWords);
   return {
     ...transaction,
     normalizedDescription: tokens.join(" "),
     tokens,
-    comparisonTokens: normalizeReconciliationText(comparisonText, configuration.genericWords),
-    metadata: transaction.metadata ?? {},
+    comparisonTokens: financialHint.comparisonTokens,
+    metadata: {
+      ...(transaction.metadata ?? {}),
+      ...(financialHint.bankHint ? { bankHint: financialHint.bankHint } : {}),
+      ...(financialHint.semanticCategory ? { semanticCategory: financialHint.semanticCategory } : {}),
+    },
   };
 }
 
@@ -555,6 +833,21 @@ type ExactLedgerGroup = {
   cursor: number;
 };
 
+export function isDocumentIdentifier(value: string | undefined): boolean {
+  if (!value) return false;
+  const norm = normalizeDocumentId(value);
+  return /^\d+$/.test(norm) || /^[A-Z]{2,10}[-_\s/]?\d+$/i.test(norm) || /^\d+-[A-Z0-9]+$/i.test(norm);
+}
+
+export function hasDivergentDocument(left: PreparedTransaction, right: PreparedTransaction): boolean {
+  const leftDoc = left.documentId ? normalizeDocumentId(left.documentId) : "";
+  const rightDoc = right.documentId ? normalizeDocumentId(right.documentId) : "";
+  if (leftDoc && rightDoc && isDocumentIdentifier(leftDoc) && isDocumentIdentifier(rightDoc) && leftDoc !== rightDoc) {
+    return true;
+  }
+  return false;
+}
+
 class ExactLedgerCandidates {
   private readonly groups: ExactLedgerGroup[];
   private readonly groupIndexBySignature = new Map<string, number>();
@@ -591,7 +884,7 @@ class ExactLedgerCandidates {
       if (exactGroupIndex !== undefined) {
         const exactGroup = this.groups[exactGroupIndex]!;
         const ledger = exactGroup.transactions[exactGroup.cursor];
-        if (ledger) {
+        if (ledger && !hasDivergentDocument(bank, ledger)) {
           exactGroup.cursor += 1;
           this.consumed.add(ledger.id);
           return { ledger, score: 1 };
@@ -609,6 +902,7 @@ class ExactLedgerCandidates {
       const group = this.groups[groupIndex]!;
       const ledger = group.transactions[group.cursor];
       if (!ledger) continue;
+      if (hasDivergentDocument(bank, ledger)) continue;
       const score = reconciliationTextSimilarity(bank.comparisonTokens, group.tokens);
       if (!best || score > best.score || (score === best.score && compareTransactions(ledger, best.ledger) < 0)) {
         best = { groupIndex, ledger, score };
@@ -619,6 +913,7 @@ class ExactLedgerCandidates {
       while (this.consumed.has(this.transactions[this.earliestCursor]?.id ?? "")) this.earliestCursor += 1;
       const ledger = this.transactions[this.earliestCursor];
       if (!ledger) return undefined;
+      if (hasDivergentDocument(bank, ledger)) return undefined;
       const groupIndex = this.groupIndexByTransactionId.get(ledger.id)!;
       best = { groupIndex, ledger, score: 0 };
     }
@@ -720,6 +1015,9 @@ class WindowLedgerCandidates {
     if (candidateCount === 1) {
       const entry = dateCandidates.find(({ candidates }) => candidates.availableCount === 1)!;
       const ledger = entry.candidates.firstAvailable()!;
+      if (hasDivergentDocument(bank, ledger)) {
+        return undefined;
+      }
       const group = entry.candidates.groupFor(ledger);
       entry.candidates.consume(group);
       return {
@@ -733,7 +1031,7 @@ class WindowLedgerCandidates {
     const exactGroups = dateCandidates
       .map((entry) => ({ ...entry, group: entry.candidates.groupBySignature.get(exactSignature) }))
       .filter((entry): entry is typeof entry & { group: WindowLedgerGroup } =>
-        Boolean(entry.group && entry.group.cursor < entry.group.transactions.length));
+        Boolean(entry.group && entry.group.cursor < entry.group.transactions.length && !hasDivergentDocument(bank, entry.group.transactions[entry.group.cursor]!)));
     const exactCandidateCount = exactGroups.reduce(
       (count, entry) => count + entry.group.transactions.length - entry.group.cursor,
       0,
@@ -761,8 +1059,9 @@ class WindowLedgerCandidates {
     let secondScore = Number.NEGATIVE_INFINITY;
     let evaluatedCandidateCount = 0;
     for (const [group, entry] of groups) {
-      const availableCount = group.transactions.length - group.cursor;
       const ledger = group.transactions[group.cursor]!;
+      if (hasDivergentDocument(bank, ledger)) continue;
+      const availableCount = group.transactions.length - group.cursor;
       const score = reconciliationTextSimilarity(bank.comparisonTokens, group.tokens);
       evaluatedCandidateCount += availableCount;
       if (!best || score > best.score ||

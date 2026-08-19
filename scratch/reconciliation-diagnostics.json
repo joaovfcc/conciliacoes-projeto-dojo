@@ -1,0 +1,382 @@
+{
+  "rawFiles": {
+    "statementFile": "C:\\Users\\joao.carvalho\\Desktop\\projeto.dojo\\docs\\mocks\\santander_130002439.xlsx",
+    "ledgerFile": "C:\\Users\\joao.carvalho\\Desktop\\projeto.dojo\\docs\\mocks\\1225_11102012_1808_1847.xlsx"
+  },
+  "parsedStatement": {
+    "bank": "033",
+    "agency": "3377",
+    "account": "130002439",
+    "accountNormalized": "130002439",
+    "transactionsCount": 8
+  },
+  "parsedLedger": {
+    "bank": "SANTANDER",
+    "agency": "3377",
+    "bankAccount": "130002439",
+    "accountNormalized": "130002439",
+    "entriesCount": 3,
+    "ledgerHistorySamplesContainingTruncatedAccount": [
+      "MOV. BANCARIO 033 3377  13000243",
+      "TAR. BANC. - 033 3377  13000243",
+      "TRANSF. BANC. - 033 3377  13000243"
+    ]
+  },
+  "preflight": {
+    "statementIdentity": {
+      "bank": "033",
+      "agency": "3377",
+      "account": "130002439"
+    },
+    "ledgerIdentity": {
+      "bank": "SANTANDER",
+      "agency": "3377",
+      "bankAccount": "130002439",
+      "account": "11102012"
+    },
+    "identityStatus": "VERIFIED_EXACT_MATCH",
+    "errors": [],
+    "warnings": [
+      {
+        "severity": "WARNING",
+        "fileId": "dc4f93a47d6c19f903de6c19",
+        "message": "Layout não reconhecido com segurança na aba Saldos",
+        "code": "LAYOUT_NOT_DETECTED"
+      }
+    ]
+  },
+  "reconciliation": {
+    "identityUsed": {
+      "ledgerAccount": "11102012",
+      "bankAccount": "130002439"
+    },
+    "matchedCount": 2,
+    "ledgerWithoutStatementCount": 1,
+    "statementWithoutLedgerCount": 0,
+    "autoApplicationCount": 2
+  },
+  "candidateTraceExample": {
+    "targetStatementLine": "30/12/2025 - PGTO ITAU 64773 - 25 - R$ 1.011,49",
+    "targetLedgerLine": "30/12/2025 - BAIXA TIT. - 000064773 - ITAU UNIBANCO - R$ 1.011,49",
+    "trace": {
+      "statement": {
+        "source": "statement",
+        "originalRowIndex": 10,
+        "parsedDate": "2025-12-30",
+        "rawDescription": "PGTO ITAU 64773 - 25",
+        "normalizedDescription": "PAYMENT_TITLE 64773",
+        "extractedDocument": "64773",
+        "normalizedDocument": "64773",
+        "rawAmount": "-1011.49",
+        "parsedAmountCents": "-101149",
+        "sign": "negative",
+        "eligibility": "ELIGIBLE",
+        "category": "PAYMENT_TITLE",
+        "finalStatus": "AUTO_MATCH_EXACT"
+      },
+      "ledger": {
+        "source": "ledger",
+        "originalRowIndex": 20,
+        "parsedDate": "2025-12-30",
+        "rawHistory": "BAIXA TIT. - 000064773 - ITAU UNIBANCO",
+        "normalizedHistory": "PAYMENT_TITLE 64773 UNIBANCO",
+        "extractedDocument": "000064773",
+        "normalizedDocument": "64773",
+        "debitCents": "0",
+        "creditCents": "101149",
+        "parsedAmountCents": "-101149",
+        "sign": "negative",
+        "accountingAccount": "11102012",
+        "counterpartyAccount": null,
+        "category": "PAYMENT_TITLE",
+        "eligibility": "ELIGIBLE",
+        "finalStatus": "AUTO_MATCH_EXACT"
+      },
+      "candidateComparison": {
+        "statementLine": "30/12/2025 - PGTO ITAU 64773 - 25 - R$ -1011.49",
+        "ledgerLine": "30/12/2025 - BAIXA TIT. - 000064773 - ITAU UNIBANCO - R$ -1011.49",
+        "sameDate": true,
+        "dateDiffDays": 0,
+        "sameAmount": true,
+        "sameAbsAmount": true,
+        "sameSignAfterConvention": true,
+        "documentCompatible": true,
+        "descriptionCompatible": true,
+        "semanticCategoryCompatible": true,
+        "wasCandidateGenerated": true,
+        "finalDecision": "MATCHED"
+      }
+    }
+  },
+  "coverage": {
+    "overallOperational": {
+      "absoluteValue": {
+        "covered": "2370.00",
+        "formula": "(valor razão conciliado + valor extrato operacional conciliado) / valor elegível total",
+        "label": "Cobertura geral operacional de valor",
+        "pending": "0.01",
+        "total": "2370.01",
+        "percentage": "100.00"
+      },
+      "lines": {
+        "covered": "4",
+        "formula": "(razão conciliado + extrato operacional conciliado) / (razão elegível + extrato operacional elegível)",
+        "label": "Cobertura geral operacional",
+        "pending": "1",
+        "total": "5",
+        "percentage": "80.00"
+      }
+    },
+    "ledger": {
+      "absoluteValue": {
+        "covered": "1185.00",
+        "formula": "valor absoluto do razão conciliado / valor absoluto elegível do razão",
+        "label": "Cobertura de valor do razão",
+        "pending": "0.01",
+        "total": "1185.01",
+        "percentage": "100.00"
+      },
+      "lines": {
+        "covered": "2",
+        "formula": "linhas do razão conciliadas / linhas elegíveis do razão",
+        "label": "Cobertura do razão",
+        "pending": "1",
+        "total": "3",
+        "percentage": "66.67"
+      }
+    },
+    "statementOperational": {
+      "absoluteValue": {
+        "covered": "1185.00",
+        "formula": "valor absoluto operacional conciliado / valor absoluto operacional elegível",
+        "label": "Cobertura de valor do extrato operacional",
+        "pending": "0.00",
+        "total": "1185.00",
+        "percentage": "100.00"
+      },
+      "lines": {
+        "covered": "2",
+        "formula": "linhas operacionais do extrato conciliadas / linhas operacionais elegíveis",
+        "label": "Cobertura do extrato operacional",
+        "pending": "0",
+        "total": "2",
+        "percentage": "100.00"
+      }
+    },
+    "statementTotal": {
+      "absoluteValue": {
+        "covered": "1185.00",
+        "formula": "valor absoluto conciliado do extrato / valor absoluto transacional total do extrato",
+        "label": "Cobertura de valor do extrato total",
+        "pending": "0.00",
+        "total": "2370.00",
+        "percentage": "50.00"
+      },
+      "lines": {
+        "covered": "2",
+        "formula": "linhas do extrato conciliadas / total de movimentos transacionais do extrato",
+        "label": "Cobertura do extrato total",
+        "pending": "0",
+        "total": "4",
+        "percentage": "50.00"
+      }
+    }
+  },
+  "apiPayload": {
+    "status": "COMPLETED_WITH_ISSUES",
+    "summaryCount": 1,
+    "resultsCount": 5,
+    "controls": {
+      "balances": {
+        "openingStatus": "FAILED",
+        "closingStatus": "NOT_AVAILABLE",
+        "openingDifference": "-274.41",
+        "bankOpening": "0.00",
+        "ledgerOpening": "274.41"
+      },
+      "signProfiles": [
+        "BANK_LIABILITY"
+      ],
+      "movements": {
+        "ledger": "815.01",
+        "status": "PASSED",
+        "bankConciliable": "815.00",
+        "difference": "-0.01"
+      },
+      "countsByStatus": [
+        {
+          "status": "AUTO_MATCH_EXACT",
+          "count": "2"
+        },
+        {
+          "status": "AUTO_APPLICATION_EXCLUDED",
+          "count": "2"
+        },
+        {
+          "status": "LEDGER_WITHOUT_STATEMENT",
+          "count": "1"
+        }
+      ],
+      "pendingByDate": [
+        {
+          "ledgerValue": "0.01",
+          "difference": "-0.01",
+          "ledgerCount": "1",
+          "date": "2025-12-29",
+          "bankValue": "0.00",
+          "bankCount": "0"
+        }
+      ],
+      "coverage": {
+        "overallOperational": {
+          "absoluteValue": {
+            "covered": "2370.00",
+            "formula": "(valor razão conciliado + valor extrato operacional conciliado) / valor elegível total",
+            "label": "Cobertura geral operacional de valor",
+            "pending": "0.01",
+            "total": "2370.01",
+            "percentage": "100.00"
+          },
+          "lines": {
+            "covered": "4",
+            "formula": "(razão conciliado + extrato operacional conciliado) / (razão elegível + extrato operacional elegível)",
+            "label": "Cobertura geral operacional",
+            "pending": "1",
+            "total": "5",
+            "percentage": "80.00"
+          }
+        },
+        "ledger": {
+          "absoluteValue": {
+            "covered": "1185.00",
+            "formula": "valor absoluto do razão conciliado / valor absoluto elegível do razão",
+            "label": "Cobertura de valor do razão",
+            "pending": "0.01",
+            "total": "1185.01",
+            "percentage": "100.00"
+          },
+          "lines": {
+            "covered": "2",
+            "formula": "linhas do razão conciliadas / linhas elegíveis do razão",
+            "label": "Cobertura do razão",
+            "pending": "1",
+            "total": "3",
+            "percentage": "66.67"
+          }
+        },
+        "statementTotal": {
+          "absoluteValue": {
+            "covered": "1185.00",
+            "formula": "valor absoluto conciliado do extrato / valor absoluto transacional total do extrato",
+            "label": "Cobertura de valor do extrato total",
+            "pending": "0.00",
+            "total": "2370.00",
+            "percentage": "50.00"
+          },
+          "lines": {
+            "covered": "2",
+            "formula": "linhas do extrato conciliadas / total de movimentos transacionais do extrato",
+            "label": "Cobertura do extrato total",
+            "pending": "0",
+            "total": "4",
+            "percentage": "50.00"
+          }
+        },
+        "statement": {
+          "absoluteValue": {
+            "covered": "1185.00",
+            "formula": "valor absoluto conciliado do extrato / valor absoluto transacional total do extrato",
+            "label": "Cobertura de valor do extrato total",
+            "pending": "0.00",
+            "total": "2370.00",
+            "percentage": "50.00"
+          },
+          "lines": {
+            "covered": "2",
+            "formula": "linhas do extrato conciliadas / total de movimentos transacionais do extrato",
+            "label": "Cobertura do extrato total",
+            "pending": "0",
+            "total": "4",
+            "percentage": "50.00"
+          }
+        },
+        "overall": {
+          "absoluteValue": {
+            "covered": "2370.00",
+            "formula": "(valor razão conciliado + valor extrato operacional conciliado) / valor elegível total",
+            "label": "Cobertura geral operacional de valor",
+            "pending": "0.01",
+            "total": "2370.01",
+            "percentage": "100.00"
+          },
+          "lines": {
+            "covered": "4",
+            "formula": "(razão conciliado + extrato operacional conciliado) / (razão elegível + extrato operacional elegível)",
+            "label": "Cobertura geral operacional",
+            "pending": "1",
+            "total": "5",
+            "percentage": "80.00"
+          }
+        },
+        "statementOperational": {
+          "absoluteValue": {
+            "covered": "1185.00",
+            "formula": "valor absoluto operacional conciliado / valor absoluto operacional elegível",
+            "label": "Cobertura de valor do extrato operacional",
+            "pending": "0.00",
+            "total": "1185.00",
+            "percentage": "100.00"
+          },
+          "lines": {
+            "covered": "2",
+            "formula": "linhas operacionais do extrato conciliadas / linhas operacionais elegíveis",
+            "label": "Cobertura do extrato operacional",
+            "pending": "0",
+            "total": "2",
+            "percentage": "100.00"
+          }
+        },
+        "lines": {
+          "covered": "4",
+          "formula": "(razão conciliado + extrato operacional conciliado) / (razão elegível + extrato operacional elegível)",
+          "label": "Cobertura geral operacional",
+          "pending": "1",
+          "total": "5",
+          "percentage": "80.00"
+        },
+        "absoluteValue": {
+          "covered": "2370.00",
+          "formula": "(valor razão conciliado + valor extrato operacional conciliado) / valor elegível total",
+          "label": "Cobertura geral operacional de valor",
+          "pending": "0.01",
+          "total": "2370.01",
+          "percentage": "100.00"
+        },
+        "operational": {
+          "absoluteValue": {
+            "covered": "1185.00",
+            "formula": "valor absoluto operacional conciliado / valor absoluto operacional elegível",
+            "label": "Cobertura de valor do extrato operacional",
+            "pending": "0.00",
+            "total": "1185.00",
+            "percentage": "100.00"
+          },
+          "lines": {
+            "covered": "2",
+            "formula": "linhas operacionais do extrato conciliadas / linhas operacionais elegíveis",
+            "label": "Cobertura do extrato operacional",
+            "pending": "0",
+            "total": "2",
+            "percentage": "100.00"
+          }
+        }
+      },
+      "tolerance": "0.05"
+    }
+  },
+  "exportedReport": {
+    "coverageSheetFound": true,
+    "formulasFound": true,
+    "identityFound": true
+  }
+}

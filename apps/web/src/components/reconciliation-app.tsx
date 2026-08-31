@@ -1831,16 +1831,6 @@ function Results(props: {
               value={`${controls.coverage.overallOperational?.absoluteValue.percentage ?? controls.coverage.absoluteValue.percentage}%`}
             />
             <Metric
-              label="Pendente operacional"
-              value={
-                controls.coverage.overallOperational?.absoluteValue.pending !== undefined
-                  ? formatCurrency(Number(controls.coverage.overallOperational.absoluteValue.pending))
-                  : controls.coverage.absoluteValue.pending !== undefined
-                    ? formatCurrency(Number(controls.coverage.absoluteValue.pending))
-                    : "R$ 0,00"
-              }
-            />
-            <Metric
               label="Diferença de saldo final"
               value={
                 controls.balances.closingDifference === undefined

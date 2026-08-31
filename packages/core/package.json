@@ -13,6 +13,11 @@
       "types": "./src/presentation.ts",
       "import": "./dist/src/presentation.js",
       "default": "./dist/src/presentation.js"
+    },
+    "./presentation.js": {
+      "types": "./src/presentation.ts",
+      "import": "./dist/src/presentation.js",
+      "default": "./dist/src/presentation.js"
     }
   },
   "scripts": {

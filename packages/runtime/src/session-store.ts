@@ -143,7 +143,7 @@ function mergeSession(current: ReconciliationSession, incoming: ReconciliationSe
     if (current.confirmationHash) merged.confirmationHash = current.confirmationHash;
     else delete merged.confirmationHash;
   }
-  if (statusRank(current.status) > statusRank(incoming.status)) {
+  if (statusRank(current) > statusRank(incoming)) {
     merged.closed = current.closed;
     merged.status = current.status;
     merged.progress = current.progress;
@@ -159,13 +159,16 @@ function isSuccessfulTerminal(status: ReconciliationSession["status"]): boolean 
   return status === "COMPLETED" || status === "COMPLETED_WITH_ISSUES";
 }
 
-function statusRank(status: ReconciliationSession["status"]): number {
+function statusRank(session: { status: ReconciliationSession["status"]; pendingAction?: string }): number {
+  if (session.status === "QUEUED") {
+    return session.pendingAction === "PROCESS" ? 5 : 3;
+  }
   return {
     DRAFT: 0, UPLOADING: 1, READY: 2, PREFLIGHT: 3, AWAITING_CONFIRMATION: 4,
-    QUEUED: 5, VALIDATING: 6, EXTRACTING: 6, OCR_PROCESSING: 6, RECONCILING: 7,
+    VALIDATING: 6, EXTRACTING: 6, OCR_PROCESSING: 6, RECONCILING: 7,
     COMPLETED: 8, COMPLETED_WITH_ISSUES: 8, FAILED: 8, CANCELLING: 9,
     CANCELLED: 10, EXPIRED: 10,
-  }[status];
+  }[session.status] ?? 0;
 }
 
 function ensureArray<T>(value: unknown): T[] {
@@ -215,13 +218,19 @@ if value then
     incoming.confirmation = current.confirmation
     incoming.confirmationHash = current.confirmationHash
   end
-  local ranks = {
-    DRAFT=0, UPLOADING=1, READY=2, PREFLIGHT=3, AWAITING_CONFIRMATION=4,
-    QUEUED=5, VALIDATING=6, EXTRACTING=6, OCR_PROCESSING=6, RECONCILING=7,
-    COMPLETED=8, COMPLETED_WITH_ISSUES=8, FAILED=8, CANCELLING=9,
-    CANCELLED=10, EXPIRED=10
-  }
-  if ranks[current.status] > ranks[incoming.status] then
+  local function get_rank(sess)
+    if sess.status == 'QUEUED' then
+      if sess.pendingAction == 'PROCESS' then return 5 else return 3 end
+    end
+    local ranks = {
+      DRAFT=0, UPLOADING=1, READY=2, PREFLIGHT=3, AWAITING_CONFIRMATION=4,
+      VALIDATING=6, EXTRACTING=6, OCR_PROCESSING=6, RECONCILING=7,
+      COMPLETED=8, COMPLETED_WITH_ISSUES=8, FAILED=8, CANCELLING=9,
+      CANCELLED=10, EXPIRED=10
+    }
+    return ranks[sess.status] or 0
+  end
+  if get_rank(current) > get_rank(incoming) then
     incoming.closed = current.closed
     incoming.status = current.status
     incoming.progress = current.progress

@@ -71,7 +71,7 @@ describe('AuthenticatedApp', () => {
     fireEvent.change(screen.getByLabelText('Confirme a nova senha'), { target: { value: 'new-password-123' } });
     fireEvent.click(screen.getByRole('button', { name: 'Trocar senha' }));
 
-    expect(await screen.findByText('Entre para conciliar')).toBeInTheDocument();
+    expect(await screen.findByText('Acesso ao Concilia')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenLastCalledWith('/api/auth/change-password', expect.objectContaining({
       method: 'POST',
       headers: expect.objectContaining({ Authorization: 'Bearer access-token' }),
@@ -92,8 +92,7 @@ describe('AuthenticatedApp', () => {
 
     render(<AuthenticatedApp />);
 
-    fireEvent.click(await screen.findByRole('checkbox'));
-    fireEvent.click(screen.getByRole('button', { name: 'Iniciar nova conciliação' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova conciliação' }));
     fireEvent.change(screen.getByLabelText('Tolerância de valor (R$)'), { target: { value: '0,01' } });
     fireEvent.change(screen.getByLabelText('Razão Protheus'), { target: { files: [new File(['ledger'], 'razao.csv')] } });
     fireEvent.change(screen.getByLabelText('Extratos bancários'), { target: { files: [new File(['statement'], 'extrato.ofx')] } });
@@ -104,6 +103,41 @@ describe('AuthenticatedApp', () => {
       body: JSON.stringify({ companyId: 'company-1' }),
     })));
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/auth/refresh')).toHaveLength(2);
+  });
+
+  it('exibe banner de standby e desabilita o formulário após 5 tentativas (HTTP 429)', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED' } }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'Limite de 5 tentativas excedido. Aguarde 5 minutos em standby antes de tentar novamente.',
+          retryAfterSeconds: 300,
+        },
+      }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '300' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<AuthenticatedApp />);
+
+    const emailInput = await screen.findByLabelText('E-mail');
+    const passwordInput = screen.getByLabelText('Senha');
+    const submitButton = screen.getByRole('button', { name: 'Entrar' });
+
+    fireEvent.change(emailInput, { target: { value: 'owner@example.com' } });
+    fireEvent.change(passwordInput, { target: { value: 'wrong-password' } });
+    fireEvent.click(submitButton);
+
+    expect(await screen.findByText('Acesso temporariamente em standby')).toBeInTheDocument();
+    expect(screen.getByText(/Limite de 5 tentativas de login excedido/)).toBeInTheDocument();
+    expect(emailInput).toBeDisabled();
+    expect(passwordInput).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Standby/ })).toBeDisabled();
   });
 });
 

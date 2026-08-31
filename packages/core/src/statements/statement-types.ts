@@ -25,6 +25,7 @@ export interface StatementLayoutProfile {
     debit?: string[];
     credit?: string[];
     balance?: string[];
+    dcIndicator?: string[];
   };
 
   rules: {
@@ -65,6 +66,7 @@ export interface ParsedStatement {
   transactions: NormalizedBankTransaction[];
   warnings: TabularWarning[];
   metadata?: {
+    bank?: string;
     agency?: string;
     account?: string;
     openingBalance?: number;

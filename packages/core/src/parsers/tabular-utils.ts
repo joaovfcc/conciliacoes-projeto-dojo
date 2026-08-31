@@ -1,6 +1,7 @@
 import { parse as parseCsv } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import { normalizeCode, normalizeHeader } from "../normalization.js";
+import { extractBankMetadataFromLines } from "./bank-metadata-extractor.js";
 import { decodeText, normalizeAscii } from "./utils.js";
 import type { SourceFileInput, LedgerFileMetadata } from "./types.js";
 
@@ -47,17 +48,16 @@ export async function tabularRows(file: SourceFileInput): Promise<{ rows: Array<
       }
       for (const row of rows.slice(0, 100)) {
         for (const value of row) {
-          const match = /\bCONTA\s*-\s*([0-9][0-9.]*)\s*-/i.exec(String(value ?? ""));
-          if (match) {
+          const str = String(value ?? "").trim();
+          if (!str) continue;
+          const match = /\bCONTA\s*-\s*([0-9][0-9.]*)\s*-/i.exec(str);
+          if (match && !metadata.ledgerAccount) {
             metadata.ledgerAccount = match[1]!.replace(/\D/g, "");
-            const details = String(value ?? "");
-            const bankMatch = /\bBANCO\s+([A-ZÀ-Ú0-9]+).*?\bAG\.?\s*([0-9]+).*?\bC\/?C\s*([0-9-]+)/i.exec(details);
-            if (bankMatch) {
-              metadata.bank = normalizeCode(bankMatch[1]);
-              metadata.agency = normalizeCode(bankMatch[2]);
-              metadata.bankAccount = normalizeCode(bankMatch[3]);
-            }
           }
+          const bankCandidate = extractBankMetadataFromLines([str]);
+          if (bankCandidate.bank && !metadata.bank) metadata.bank = bankCandidate.bank;
+          if (bankCandidate.agency && !metadata.agency) metadata.agency = bankCandidate.agency;
+          if (bankCandidate.account && !metadata.bankAccount) metadata.bankAccount = bankCandidate.account;
         }
       }
     });

@@ -60,8 +60,35 @@ function normalizeDigits(value: string | undefined): string {
   return (value ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
 }
 
+export function normalizeDocumentId(value: unknown): string {
+  const raw = String(value ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+  if (!raw) return "";
+
+  // 1. Purely numeric sequence (e.g. "000064773" -> "64773", "0000" -> "0")
+  if (/^\d+$/.test(raw)) {
+    return raw.replace(/^0+(?=\d)/, "");
+  }
+
+  // 2. Text prefix + separator + leading zeros number (e.g. "DOC-000064773" -> "DOC-64773", "NF 000123" -> "NF 123")
+  const prefixMatch = /^([A-Z]{2,10})([-_\s/]+)0+(\d+)$/.exec(raw);
+  if (prefixMatch) {
+    const [, prefix, sep, num] = prefixMatch;
+    return `${prefix}${sep}${num}`;
+  }
+
+  // 3. Leading zeros number + single letter/digit suffix (e.g. "000064773-A" -> "64773-A")
+  const suffixMatch = /^0+(\d+)(-[A-Z0-9])$/.exec(raw);
+  if (suffixMatch) {
+    const [, num, suffix] = suffixMatch;
+    return `${num}${suffix}`;
+  }
+
+  // 4. Preserve alphanumeric tokens like "ABC000123", "001-002", "64773-A"
+  return raw;
+}
+
 export function normalizeDocument(value: unknown): string {
-  return String(value ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+  return normalizeDocumentId(value);
 }
 
 export function parseMoney(value: unknown): Decimal {

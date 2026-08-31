@@ -52,6 +52,7 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
     const profile = profiles.find(p => p.id === layoutMatch.profileId)!;
     const parsed = parseStatementGeneric(sheet, profile, layoutMatch.headerRowIndex, format, file.originalName);
 
+    const sheetBank = profile.bankCode || parsed.metadata?.bank || "";
     const sheetAgency = parsed.metadata?.agency || "";
     const sheetAccount = parsed.metadata?.account || "";
     if (parsed.metadata?.openingBalance !== undefined && openingBalance === undefined) openingBalance = money(parsed.metadata.openingBalance);
@@ -65,7 +66,7 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
         value: money(tx.direction === "DEBIT" ? -tx.amount : tx.amount),
         ...(tx.balance !== undefined ? { runningBalance: money(tx.balance) } : {}),
         sourceId: "", // Not robust enough yet
-        bank: profile.bankCode,
+        bank: sheetBank,
         agency: sheetAgency,
         account: sheetAccount,
         extractionMethod: "TABULAR",

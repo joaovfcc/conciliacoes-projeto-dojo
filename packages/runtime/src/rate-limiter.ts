@@ -29,11 +29,10 @@ export class RedisRateLimiter implements RateLimiter {
 
   constructor(redisUrl: string, private readonly keySecret: string) {
     if (keySecret.length < 32) throw new Error("RATE_LIMIT_KEY_SECRET deve possuir ao menos 32 caracteres");
-    this.redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, enableOfflineQueue: false, lazyConnect: true });
+    this.redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
   }
 
   async consume(policy: RateLimitPolicy, rawKey: string): Promise<RateLimitResult> {
-    if (this.redis.status === "wait") await this.redis.connect();
     const key = `rate:${policy.name}:${this.hash(rawKey)}`;
     const [count, ttl] = await this.redis.eval(consumeScript, 1, key, policy.windowMs) as [number, number];
     return {
@@ -44,7 +43,11 @@ export class RedisRateLimiter implements RateLimiter {
   }
 
   async close(): Promise<void> {
-    if (this.redis.status !== "end") await this.redis.quit();
+    try {
+      if (this.redis.status !== "end") await this.redis.quit();
+    } catch {
+      this.redis.disconnect();
+    }
   }
 
   private hash(value: string): string {

@@ -77,34 +77,18 @@ describe("authentication HTTP handlers", () => {
     expect(serialized).not.toContain("secret-not-returned");
   });
 
-  it("rate limits login by IP and normalized email with Retry-After", async () => {
+  it("does not limit login attempts", async () => {
     const auth = new FakeWebAuthService();
-    const rateLimiter = new FakeRateLimiter();
-    rateLimiter.allowed = false;
-    const response = await createAuthHandlers(dependencies(auth, rateLimiter)).login(request("/api/auth/login", {
+    const response = await createAuthHandlers({
+      ...dependencies(auth, new FakeRateLimiter()),
+      rateLimiter: () => { throw new Error("redis unavailable"); },
+    }).login(request("/api/auth/login", {
       email: " OWNER@Example.COM ",
       password: "correct-password",
     }));
 
-    expect(response.status).toBe(429);
-    expect(response.headers.get("retry-after")).toBe("60");
-    expect(rateLimiter.keys).toEqual(["ip:direct"]);
-    expect(auth.loginCalls).toBe(0);
-  });
-
-  it("fails closed when abuse protection is unavailable", async () => {
-    const rateLimiter = new FakeRateLimiter();
-    rateLimiter.failure = new Error("redis unavailable");
-    const response = await createAuthHandlers(dependencies(new FakeWebAuthService(), rateLimiter)).login(request(
-      "/api/auth/login",
-      { email: "owner@example.com", password: "correct-password" },
-    ));
-
-    expect(response.status).toBe(503);
-    expect(response.headers.get("retry-after")).toBe("60");
-    expect(await response.json()).toEqual({
-      error: { code: "RATE_LIMIT_UNAVAILABLE", message: "Proteção contra abuso indisponível" },
-    });
+    expect(response.status).toBe(200);
+    expect(auth.loginCalls).toBe(1);
   });
 
   it("rotates the refresh cookie and rejects refresh without it", async () => {
@@ -176,11 +160,12 @@ class FakeRateLimiter {
   allowed = true;
   keys: string[] = [];
   failure?: Error;
+  retryAfterSeconds = 300;
 
   async consume(_policy: { limit: number }, key: string) {
     if (this.failure) throw this.failure;
     this.keys.push(key);
-    return { allowed: this.allowed, remaining: this.allowed ? 1 : 0, retryAfterSeconds: 60 };
+    return { allowed: this.allowed, remaining: this.allowed ? 1 : 0, retryAfterSeconds: this.retryAfterSeconds };
   }
 }
 

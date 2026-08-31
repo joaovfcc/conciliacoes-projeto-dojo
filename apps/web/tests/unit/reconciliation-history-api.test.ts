@@ -6,6 +6,7 @@ import { NextRequest } from 'next/server';
 import { describe, expect, it } from 'vitest';
 import {
   getReconciliationHistory,
+  deleteReconciliationHistory,
   listReconciliationHistory,
   reconciliationHistoryError,
 } from '../../src/lib/reconciliation-history-api';
@@ -47,6 +48,25 @@ describe('reconciliation history API', () => {
     )));
 
     expect(response.status).toBe(403);
+  });
+
+  it('deletes a historical record inside the authorized company scope', async () => {
+    const repository = await repositoryWithRecords();
+    const response = await deleteReconciliationHistory(request('/api/reconciliation-history/visible'), 'visible', dependencies(repository));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ success: true, id: 'visible' });
+    expect(await repository.findById('visible', ['company-1'], now)).toBeNull();
+  });
+
+  it('returns 404 when attempting to delete a record outside company scope', async () => {
+    const repository = await repositoryWithRecords();
+    const hidden = reconciliationHistoryError(await capture(() => deleteReconciliationHistory(
+      request('/api/reconciliation-history/other-company'), 'other-company', dependencies(repository),
+    )));
+
+    expect(hidden.status).toBe(404);
   });
 });
 

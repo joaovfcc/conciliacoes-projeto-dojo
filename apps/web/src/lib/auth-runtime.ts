@@ -22,7 +22,7 @@ export function authHandlers() {
     auth: authService(),
     signAccess: signAccessToken,
     verifyAccess: verifyAccessToken,
-    rateLimiter: rateLimiter(),
+    rateLimiter,
   });
 }
 

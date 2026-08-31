@@ -69,6 +69,18 @@ export async function exportReconciliationHistory(
   });
 }
 
+export async function deleteReconciliationHistory(
+  request: NextRequest,
+  id: string,
+  dependencies: HistoryDependencies = defaultDependencies,
+): Promise<Response> {
+  const actor = await dependencies.resolveActor(request);
+  const record = await dependencies.repository.findById(id, readableCompanyIds(actor), dependencies.now());
+  if (!record) throw notFound();
+  await dependencies.repository.delete(id);
+  return noStoreJson({ success: true, id });
+}
+
 export function reconciliationHistoryError(error: unknown): Response {
   if (error instanceof V2HttpError) {
     return noStoreJson({ error: { code: error.code, message: error.message } }, error.status);

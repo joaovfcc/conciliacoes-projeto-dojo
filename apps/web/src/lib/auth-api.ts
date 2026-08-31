@@ -33,10 +33,9 @@ export interface AuthHttpDependencies {
   auth: WebAuthService;
   signAccess(claims: AccessTokenClaims): Promise<{ token: string; expiresAt: Date }>;
   verifyAccess(token: string): Promise<AccessTokenClaims>;
-  rateLimiter: RateLimiter;
+  rateLimiter: RateLimiter | (() => RateLimiter);
 }
 
-const loginPolicy: RateLimitPolicy = { name: "auth-login", limit: 5, windowMs: 15 * 60 * 1000 };
 const refreshPolicy: RateLimitPolicy = { name: "auth-refresh", limit: 30, windowMs: 5 * 60 * 1000 };
 const passwordPolicy: RateLimitPolicy = { name: "auth-password", limit: 5, windowMs: 60 * 60 * 1000 };
 
@@ -45,8 +44,6 @@ export function createAuthHandlers(dependencies: AuthHttpDependencies) {
     login: (request: NextRequest) => handle(async () => {
       assertOrigin(request);
       const body = loginSchema.parse(await request.json());
-      await consumeLimit(dependencies.rateLimiter, loginPolicy, `ip:${clientAddress(request)}`);
-      await consumeLimit(dependencies.rateLimiter, loginPolicy, `email:${body.email.trim().toLowerCase()}`);
       return grantResponse(await dependencies.auth.login(body.email, body.password), dependencies);
     }),
     refresh: (request: NextRequest) => handle(async () => {
@@ -143,7 +140,7 @@ async function handle(action: () => Promise<Response>): Promise<Response> {
 function errorResponse(status: number, code: string, message: string, retryAfterSeconds?: number): NextResponse {
   const headers = new Headers(noStoreHeaders());
   if (retryAfterSeconds !== undefined) headers.set("Retry-After", String(retryAfterSeconds));
-  return NextResponse.json({ error: { code, message } }, { status, headers });
+  return NextResponse.json({ error: { code, message, ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}) } }, { status, headers });
 }
 
 function noStoreJson(body: unknown): NextResponse {
@@ -173,14 +170,20 @@ function cookieSecure(): boolean {
   return process.env.AUTH_COOKIE_SECURE === "true" || process.env.NODE_ENV === "production";
 }
 
-async function consumeLimit(limiter: RateLimiter, policy: RateLimitPolicy, key: string): Promise<void> {
+async function consumeLimit(source: RateLimiter | (() => RateLimiter), policy: RateLimitPolicy, key: string): Promise<void> {
   try {
+    const limiter = typeof source === "function" ? source() : source;
     const result = await limiter.consume(policy, key);
     if (!result.allowed) {
+      const minutes = Math.ceil(result.retryAfterSeconds / 60);
+      const timeDescription =
+        result.retryAfterSeconds < 60
+          ? `${result.retryAfterSeconds} segundos`
+          : `${minutes} minuto${minutes === 1 ? "" : "s"}`;
       throw new AuthHttpError(
         429,
         "RATE_LIMITED",
-        `Tente novamente em ${result.retryAfterSeconds} segundos`,
+        `Limite de 5 tentativas excedido. Aguarde ${timeDescription} em standby antes de tentar novamente.`,
         result.retryAfterSeconds,
       );
     }

@@ -83,7 +83,7 @@ export class RedisSessionStore implements SessionStore {
     await this.save(session); await this.markCreated(clientKey);
     return { session: publicSession(session), token };
   }
-  async get(id: string) { const value = await this.redis.get(`session:${id}`); return value ? JSON.parse(value) as ReconciliationSession : null; }
+  async get(id: string) { const value = await this.redis.get(`session:${id}`); return value ? deserializeSession(value) : null; }
   async save(session: ReconciliationSession) {
     const ttl = Math.max(1, new Date(session.expiresAt).getTime() - Date.now());
     await this.redis.eval(
@@ -102,7 +102,7 @@ export class RedisSessionStore implements SessionStore {
     return result as "CLAIMED" | "SAME" | "CONFLICT" | "MISSING";
   }
   async claimProcessing(id: string, attemptId: string) { const result = await this.redis.eval(claimProcessingScript, 1, `session:${id}`, attemptId); if (result === 0) return { claimed: false as const }; return { claimed: true as const, generation: Number(result) }; }
-  async markClosed(id: string, status: "CANCELLED" | "EXPIRED") { const value = await this.redis.eval(markClosedScript, 1, `session:${id}`, status) as string | null; return value ? JSON.parse(value) as ReconciliationSession : null; }
+  async markClosed(id: string, status: "CANCELLED" | "EXPIRED") { const value = await this.redis.eval(markClosedScript, 1, `session:${id}`, status) as string | null; return value ? deserializeSession(value) : null; }
   async touchHeartbeat(id: string, at: string) { return await this.redis.eval(touchHeartbeatScript, 1, `session:${id}`, at) === 1; }
   async complete(session: ReconciliationSession) {
     const ttl = Math.max(1, new Date(session.expiresAt).getTime() - Date.now());
@@ -112,7 +112,13 @@ export class RedisSessionStore implements SessionStore {
   async countCreatedLastHour(clientKey: string) { const key = `rate:create:${clientKey}`; const cutoff = Date.now() - 3_600_000; await this.redis.zremrangebyscore(key, 0, cutoff); return this.redis.zcard(key); }
   async markCreated(clientKey: string) { const key = `rate:create:${clientKey}`; await this.redis.zadd(key, Date.now(), `${Date.now()}:${randomBytes(4).toString("hex")}`); await this.redis.expire(key, 3600); }
   async listExpired(now: Date) { const ids = await this.redis.smembers("sessions:active"); const expired: ReconciliationSession[] = []; for (const id of ids) { const item = await this.get(id); if (!item) { await this.redis.srem("sessions:active", id); continue; } if (new Date(item.expiresAt) <= now || now.getTime() - new Date(item.lastHeartbeatAt).getTime() > this.config.heartbeatGraceSeconds * 1000) expired.push(item); } return expired; }
-  async close(): Promise<void> { await this.redis.quit(); }
+  async close(): Promise<void> {
+    try {
+      if (this.redis.status !== "end") await this.redis.quit();
+    } catch {
+      this.redis.disconnect();
+    }
+  }
 }
 
 export function createSessionStore(config: RuntimeConfig): SessionStore {
@@ -137,7 +143,7 @@ function mergeSession(current: ReconciliationSession, incoming: ReconciliationSe
     if (current.confirmationHash) merged.confirmationHash = current.confirmationHash;
     else delete merged.confirmationHash;
   }
-  if (statusRank(current.status) > statusRank(incoming.status)) {
+  if (statusRank(current) > statusRank(incoming)) {
     merged.closed = current.closed;
     merged.status = current.status;
     merged.progress = current.progress;
@@ -153,16 +159,54 @@ function isSuccessfulTerminal(status: ReconciliationSession["status"]): boolean 
   return status === "COMPLETED" || status === "COMPLETED_WITH_ISSUES";
 }
 
-function statusRank(status: ReconciliationSession["status"]): number {
+function statusRank(session: { status: ReconciliationSession["status"]; pendingAction?: string }): number {
+  if (session.status === "QUEUED") {
+    return session.pendingAction === "PROCESS" ? 5 : 3;
+  }
   return {
     DRAFT: 0, UPLOADING: 1, READY: 2, PREFLIGHT: 3, AWAITING_CONFIRMATION: 4,
-    QUEUED: 5, VALIDATING: 6, EXTRACTING: 6, OCR_PROCESSING: 6, RECONCILING: 7,
+    VALIDATING: 6, EXTRACTING: 6, OCR_PROCESSING: 6, RECONCILING: 7,
     COMPLETED: 8, COMPLETED_WITH_ISSUES: 8, FAILED: 8, CANCELLING: 9,
     CANCELLED: 10, EXPIRED: 10,
-  }[status];
+  }[session.status] ?? 0;
+}
+
+function ensureArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function deserializeSession(raw: string): ReconciliationSession {
+  const session = JSON.parse(raw) as ReconciliationSession;
+  session.files = ensureArray(session.files);
+  if (session.ledgers) session.ledgers = ensureArray(session.ledgers);
+  if (session.statements) session.statements = ensureArray(session.statements);
+  if (session.investments) session.investments = ensureArray(session.investments);
+  if (session.preflight) {
+    session.preflight.companies = ensureArray(session.preflight.companies);
+    session.preflight.branches = ensureArray(session.preflight.branches);
+    session.preflight.detectedPeriods = ensureArray(session.preflight.detectedPeriods);
+    session.preflight.ledgerAccounts = ensureArray(session.preflight.ledgerAccounts);
+    session.preflight.statements = ensureArray(session.preflight.statements);
+    session.preflight.investments = ensureArray(session.preflight.investments);
+    session.preflight.issues = ensureArray(session.preflight.issues);
+  }
+  if (session.confirmation?.mappings) {
+    session.confirmation.mappings = ensureArray<ConfirmProcessingRequest["mappings"][number]>(
+      session.confirmation.mappings,
+    ).map((mapping) => ({
+      ...mapping,
+      statementFileIds: ensureArray<string>(mapping.statementFileIds),
+    }));
+  }
+  if (session.result) {
+    session.result.results = ensureArray(session.result.results);
+    session.result.issues = ensureArray(session.result.issues);
+  }
+  return session;
 }
 
 const saveSessionScript = `
+pcall(cjson.encode_empty_table_as_object, false)
 if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
 local incoming = cjson.decode(ARGV[1])
 local value = redis.call('GET', KEYS[1])
@@ -174,13 +218,19 @@ if value then
     incoming.confirmation = current.confirmation
     incoming.confirmationHash = current.confirmationHash
   end
-  local ranks = {
-    DRAFT=0, UPLOADING=1, READY=2, PREFLIGHT=3, AWAITING_CONFIRMATION=4,
-    QUEUED=5, VALIDATING=6, EXTRACTING=6, OCR_PROCESSING=6, RECONCILING=7,
-    COMPLETED=8, COMPLETED_WITH_ISSUES=8, FAILED=8, CANCELLING=9,
-    CANCELLED=10, EXPIRED=10
-  }
-  if ranks[current.status] > ranks[incoming.status] then
+  local function get_rank(sess)
+    if sess.status == 'QUEUED' then
+      if sess.pendingAction == 'PROCESS' then return 5 else return 3 end
+    end
+    local ranks = {
+      DRAFT=0, UPLOADING=1, READY=2, PREFLIGHT=3, AWAITING_CONFIRMATION=4,
+      VALIDATING=6, EXTRACTING=6, OCR_PROCESSING=6, RECONCILING=7,
+      COMPLETED=8, COMPLETED_WITH_ISSUES=8, FAILED=8, CANCELLING=9,
+      CANCELLED=10, EXPIRED=10
+    }
+    return ranks[sess.status] or 0
+  end
+  if get_rank(current) > get_rank(incoming) then
     incoming.closed = current.closed
     incoming.status = current.status
     incoming.progress = current.progress
@@ -195,6 +245,7 @@ return 1
 `;
 
 const claimProcessingScript = `
+pcall(cjson.encode_empty_table_as_object, false)
 local value = redis.call('GET', KEYS[1])
 if not value then return 0 end
 local session = cjson.decode(value)
@@ -209,6 +260,7 @@ return generation
 `;
 
 const markClosedScript = `
+pcall(cjson.encode_empty_table_as_object, false)
 local value = redis.call('GET', KEYS[1])
 if not value then return nil end
 local session = cjson.decode(value)
@@ -222,6 +274,7 @@ return encoded
 `;
 
 const claimConfirmationScript = `
+pcall(cjson.encode_empty_table_as_object, false)
 local value = redis.call('GET', KEYS[1])
 if not value then return 'MISSING' end
 local session = cjson.decode(value)
@@ -251,6 +304,7 @@ return 1
 `;
 
 const completeSessionScript = `
+pcall(cjson.encode_empty_table_as_object, false)
 if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
 local value = redis.call('GET', KEYS[1])
 if not value then return 0 end

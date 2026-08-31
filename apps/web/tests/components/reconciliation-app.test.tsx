@@ -10,17 +10,16 @@ afterEach(() => {
 });
 
 describe("ReconciliationApp", () => {
-  it("explica a retenção autenticada antes de iniciar", () => {
+  it("apresenta o painel operacional de conciliação e métricas", () => {
     renderApp();
-    expect(screen.getByText("Retenção controlada")).toBeInTheDocument();
-    expect(screen.getByText("Resultados e evidências ficam disponíveis por um ano.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Iniciar nova conciliação" })).toBeDisabled();
+    expect(screen.getByText("Retenção")).toBeInTheDocument();
+    expect(screen.getByText("365 dias")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nova conciliação" })).toBeInTheDocument();
   });
 
   it("limita a tolerância de data visualmente a três dias", () => {
     renderApp();
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Iniciar nova conciliação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Nova conciliação" }));
 
     expect(screen.getByLabelText("Tolerância de data (dias)")).toHaveAttribute("max", "3");
   });
@@ -35,10 +34,12 @@ describe("ReconciliationApp", () => {
       results: [
         { id: "REC-1", status: "AUTO_MATCH_EXACT", rule: "RULE_1_EXACT", decisionLevel: "AUTOMATIC", reason: "Correspondência única.", valueTolerance: "0.01", ledger: { id: "l1", company: "EMPRESA", branch: "01", ledgerAccount: "111", date: "2026-01-02", document: "123", history: "Recebimento", value: "10.00", sourceId: "l1", evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR", line: 2 } }, statement: { id: "s1", bank: "ITAU", agency: "0191", bankAccount: "26775-6", date: "2026-01-02", document: "123", history: "Recebimento", value: "10.00", sourceId: "s1", evidence: { fileId: "statement", originalName: "itau.xlsx", extractionMethod: "TABULAR", line: 2, parser: "itau-checking-xlsx-v1" } } },
         { id: "REC-2", status: "AUTO_MATCH_DATE_TOLERANCE", rule: "RF-03", decisionLevel: "AUTOMATIC", reason: "Proximidade.", valueTolerance: "0.00" },
-        { id: "REC-3", status: "AUTO_MATCH_GROUP", rule: "RF-04", decisionLevel: "AUTOMATIC", reason: "Grupo.", valueTolerance: "0.00", ledgers: [
-          { id: "l2", company: "EMPRESA", branch: "01", ledgerAccount: "111", date: "2026-01-03", document: "", history: "Principal do grupo", value: "6.00", sourceId: "l2", evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR", line: 3 } },
-          { id: "l3", company: "EMPRESA", branch: "01", ledgerAccount: "111", date: "2026-01-03", document: "", history: "Juros do grupo", value: "4.00", sourceId: "l3", evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR", line: 4 } },
-        ] },
+        {
+          id: "REC-3", status: "AUTO_MATCH_GROUP", rule: "RF-04", decisionLevel: "AUTOMATIC", reason: "Grupo.", valueTolerance: "0.00", ledgers: [
+            { id: "l2", company: "EMPRESA", branch: "01", ledgerAccount: "111", date: "2026-01-03", document: "", history: "Principal do grupo", value: "6.00", sourceId: "l2", evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR", line: 3 } },
+            { id: "l3", company: "EMPRESA", branch: "01", ledgerAccount: "111", date: "2026-01-03", document: "", history: "Juros do grupo", value: "4.00", sourceId: "l3", evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR", line: 4 } },
+          ]
+        },
         { id: "REC-4", status: "AUTO_MATCH_DAILY_TOTAL", rule: "RF-07", decisionLevel: "AUTOMATIC", reason: "Total diário.", valueTolerance: "0.00" },
         { id: "REC-5", status: "BANK_NET_ZERO", rule: "RF-08", decisionLevel: "AUTOMATIC", reason: "Compensado.", valueTolerance: "0.00" },
         { id: "REC-6", status: "AUTO_APPLICATION_EXCLUDED", rule: "RF-01", decisionLevel: "AUTOMATIC", reason: "Aplicação.", valueTolerance: "0.00" },
@@ -65,8 +66,7 @@ describe("ReconciliationApp", () => {
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
 
     renderApp(authenticatedFetch);
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Iniciar nova conciliação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Nova conciliação" }));
     fireEvent.change(screen.getByLabelText("Tolerância de valor (R$)"), { target: { value: "0,01" } });
     fireEvent.change(screen.getByLabelText("Razão Protheus"), { target: { files: [new File(["ledger"], "razao.xlsx")] } });
     fireEvent.change(screen.getByLabelText("Extratos bancários"), { target: { files: [new File(["statement"], "itau.xlsx")] } });
@@ -83,9 +83,10 @@ describe("ReconciliationApp", () => {
     expect(screen.getByRole("tab", { name: "Grupos" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Total diário" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Compensados" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Aplicações automáticas" })).toBeInTheDocument();
-    expect(screen.getByText("Movimento bancário conciliável")).toBeInTheDocument();
-    expect(screen.getAllByText("100.00%")).toHaveLength(2);
+    expect(screen.getByText("Banco conciliável (líquido)")).toBeInTheDocument();
+    expect(screen.getByText("Cobertura geral operacional")).toBeInTheDocument();
+    expect(screen.getByText("Cobertura do razão")).toBeInTheDocument();
+    expect(screen.getByText("Cobertura do extrato operacional")).toBeInTheDocument();
     for (const [tab, status] of [
       ["Proximidade", "Conciliação com tolerância de data"],
       ["Grupos", "Conciliação em grupo"],
@@ -119,6 +120,63 @@ describe("ReconciliationApp", () => {
     expect(screen.getByText("Leiaute não identificado")).toBeInTheDocument();
     expect(screen.queryByText("TABULAR")).not.toBeInTheDocument();
     expect(screen.queryByText("LAYOUT_NOT_DETECTED")).not.toBeInTheDocument();
+  });
+
+  it("retorna para a tela inicial ao clicar na marca Concilia ou no ícone C", async () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "Nova conciliação" }));
+    expect(screen.getByRole("heading", { name: "Nova conciliação" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ir para a tela inicial do Concilia" }));
+    expect(await screen.findByText("Retenção")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nova conciliação" })).toBeInTheDocument();
+  });
+
+  it("retorna para a tela inicial ao clicar no botão Voltar na etapa de arquivos", async () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "Nova conciliação" }));
+    expect(screen.getByRole("heading", { name: "Nova conciliação" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Voltar" }));
+    expect(await screen.findByText("Retenção")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nova conciliação" })).toBeInTheDocument();
+  });
+
+  it("permite excluir um resultado do histórico com confirmação", async () => {
+    const historyItem = {
+      id: "h1",
+      companyId: "company-1",
+      companyName: "Empresa",
+      period: "202601",
+      status: "COMPLETED",
+      completedAt: "2026-01-31T12:00:00.000Z",
+      expiresAt: "2027-01-31T12:00:00.000Z",
+    };
+    const authenticatedFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/api/reconciliation-history") && init?.method === "DELETE") {
+        return Promise.resolve(new Response(JSON.stringify({ success: true, id: "h1" }), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ items: [historyItem] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderApp(authenticatedFetch);
+
+    const deleteButton = await screen.findByTitle("Excluir este resultado do histórico");
+    expect(deleteButton).toBeInTheDocument();
+
+    fireEvent.click(deleteButton);
+    const confirmButton = screen.getByRole("button", { name: "Confirmar" });
+    expect(confirmButton).toBeInTheDocument();
+
+    fireEvent.click(confirmButton);
+    await waitFor(() => {
+      expect(authenticatedFetch).toHaveBeenCalledWith("/api/reconciliation-history/h1", expect.objectContaining({ method: "DELETE" }));
+    });
   });
 });
 

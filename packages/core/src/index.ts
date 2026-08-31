@@ -150,3 +150,4 @@ export * from "./reconciliation/infrastructure/InMemoryCompletedReconciliationRe
 export * from "./shared/domain/Authorization.js";
 export * from "./database.js";
 export * from "./auth/index.js";
+export * from "./presentation.js";

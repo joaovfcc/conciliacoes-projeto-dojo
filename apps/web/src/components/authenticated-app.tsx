@@ -27,6 +27,7 @@ type AuthState =
 export function AuthenticatedApp() {
   const [state, setState] = useState<AuthState>({ status: 'RESTORING' });
   const [error, setError] = useState('');
+  const [standbySeconds, setStandbySeconds] = useState(0);
   const accessToken = useRef<string | null>(null);
   const refreshPromise = useRef<Promise<AuthGrant | null> | null>(null);
   const restoreStarted = useRef(false);
@@ -97,13 +98,18 @@ export function AuthenticatedApp() {
       cache: 'no-store',
     });
     if (!response.ok) {
-      const body = await response.json() as { error?: { message?: string } };
+      const body = await response.json() as { error?: { code?: string; message?: string; retryAfterSeconds?: number } };
+      if (response.status === 429) {
+        const seconds = body.error?.retryAfterSeconds ?? 300;
+        setStandbySeconds(seconds);
+      }
       setError(body.error?.message ?? 'Não foi possível entrar');
       return;
     }
     const grant = await response.json() as AuthGrant;
     authGeneration.current += 1;
     accessToken.current = grant.accessToken;
+    setStandbySeconds(0);
     setState({ status: 'AUTHENTICATED', user: grant.user });
   }
 
@@ -157,13 +163,39 @@ export function AuthenticatedApp() {
   }
 
   if (state.status === 'RESTORING') {
-    return <AuthFrame><div className="auth-status">Verificando sua sessão...</div></AuthFrame>;
+    return (
+      <AuthFrame>
+        <div className="auth-status" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
+          <span className="spinner spinner-lg" />
+          <span>Verificando sua sessão...</span>
+        </div>
+      </AuthFrame>
+    );
   }
   if (state.status === 'SIGNING_OUT') {
-    return <AuthFrame><div className="auth-status">Encerrando sua sessão...</div></AuthFrame>;
+    return (
+      <AuthFrame>
+        <div className="auth-status" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
+          <span className="spinner spinner-lg" />
+          <span>Encerrando sua sessão...</span>
+        </div>
+      </AuthFrame>
+    );
   }
   if (state.status === 'SIGNED_OUT') {
-    return <AuthFrame><LoginForm login={login} error={error} /></AuthFrame>;
+    return (
+      <AuthFrame>
+        <LoginForm
+          login={login}
+          error={error}
+          standbySeconds={standbySeconds}
+          onStandbyEnd={() => {
+            setStandbySeconds(0);
+            setError('');
+          }}
+        />
+      </AuthFrame>
+    );
   }
   if (state.user.passwordChangeRequired) {
     return <AuthFrame><PasswordForm changePassword={changePassword} logout={logout} error={error} /></AuthFrame>;
@@ -182,18 +214,129 @@ async function shouldRefreshAccess(response: Response): Promise<boolean> {
 }
 
 function AuthFrame({ children }: { children: React.ReactNode }) {
-  return <><Header /><main className="auth-shell">{children}</main></>;
+  return (
+    <>
+      <Header />
+      <main className="auth-shell">{children}</main>
+    </>
+  );
 }
 
 function Header() {
-  return <header className="topbar"><div className="brand"><div className="brand-mark">CB</div><div><h1>Conciliação Bancária</h1><p>Operação financeira segura</p></div></div><div className="privacy-pill">Acesso autenticado</div></header>;
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <div className="brand-mark">C</div>
+        <div>
+          <h1>Concilia</h1>
+          <p>Razão Protheus × Extratos Bancários</p>
+        </div>
+      </div>
+    </header>
+  );
 }
 
-function LoginForm({ login, error }: { login: (email: string, password: string) => Promise<void>; error: string }) {
+function LoginForm({
+  login,
+  error,
+  standbySeconds = 0,
+  onStandbyEnd,
+}: {
+  login: (email: string, password: string) => Promise<void>;
+  error: string;
+  standbySeconds?: number;
+  onStandbyEnd?: () => void;
+}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  return <section className="card auth-card"><span className="eyebrow">Área restrita</span><h2>Entre para conciliar</h2><p>Use a conta criada pelo administrador da sua organização.</p>{error ? <div className="notice error" role="alert">{error}</div> : null}<form onSubmit={(event) => { event.preventDefault(); setBusy(true); void login(email, password).finally(() => setBusy(false)); }}><label className="field">E-mail<input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><label className="field">Senha<input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label><button className="button" disabled={busy}>{busy ? "Entrando..." : "Entrar"}</button></form></section>;
+  const [remaining, setRemaining] = useState(standbySeconds);
+
+  useEffect(() => {
+    setRemaining(standbySeconds);
+  }, [standbySeconds]);
+
+  useEffect(() => {
+    if (remaining <= 0) return;
+    const timer = setInterval(() => {
+      setRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          if (onStandbyEnd) onStandbyEnd();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [remaining, onStandbyEnd]);
+
+  const isLocked = remaining > 0;
+  const minutes = Math.floor(remaining / 60);
+  const seconds = remaining % 60;
+  const formattedTime = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+  return (
+    <section className="card auth-card">
+      <h2>Acesso ao Concilia</h2>
+
+      {isLocked ? (
+        <div className="auth-standby-banner" role="alert">
+          <div className="standby-icon">🔒</div>
+          <div className="standby-content">
+            <strong>Acesso temporariamente em standby</strong>
+            <p>Limite de 5 tentativas de login excedido. Por segurança, aguarde o período de espera.</p>
+            <div className="standby-countdown">
+              Tente novamente em: <span className="countdown-timer">{formattedTime} min</span>
+            </div>
+          </div>
+        </div>
+      ) : error ? (
+        <div className="notice error" role="alert">
+          {error}
+        </div>
+      ) : null}
+
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (isLocked) return;
+          setBusy(true);
+          void login(email, password).finally(() => setBusy(false));
+        }}
+      >
+        <label className="field">
+          E-mail
+          <input
+            type="email"
+            autoComplete="username"
+            required
+            disabled={isLocked || busy}
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          Senha
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            disabled={isLocked || busy}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        <button className="button" disabled={busy || isLocked}>
+          {busy ? 'Entrando...' : isLocked ? `Standby (${formattedTime})` : 'Entrar'}
+        </button>
+      </form>
+
+      <div className="security-hint">
+        5 tentativas antes do bloqueio temporário
+      </div>
+    </section>
+  );
 }
 
 function PasswordForm({ changePassword, logout, error }: { changePassword: (current: string, next: string) => Promise<void>; logout: () => Promise<void>; error: string }) {
@@ -202,5 +345,29 @@ function PasswordForm({ changePassword, logout, error }: { changePassword: (curr
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const mismatch = confirmation.length > 0 && next !== confirmation;
-  return <section className="card auth-card"><span className="eyebrow">Primeiro acesso</span><h2>Crie uma nova senha</h2><p>A senha temporária deve ser substituída antes de acessar dados financeiros.</p>{error ? <div className="notice error" role="alert">{error}</div> : null}<form onSubmit={(event) => { event.preventDefault(); if (mismatch) return; setBusy(true); void changePassword(current, next).finally(() => setBusy(false)); }}><label className="field">Senha temporária<input type="password" autoComplete="current-password" required value={current} onChange={(event) => setCurrent(event.target.value)} /></label><label className="field">Nova senha<input type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={next} onChange={(event) => setNext(event.target.value)} /></label><label className="field">Confirme a nova senha<input type="password" autoComplete="new-password" required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>{mismatch ? <div className="field-error">As senhas não coincidem.</div> : null}<div className="actions"><button type="button" className="button secondary" onClick={() => void logout()}>Sair</button><button className="button" disabled={busy || mismatch}>{busy ? "Salvando..." : "Trocar senha"}</button></div></form></section>;
+  return (
+    <section className="card auth-card">
+      <h2>Crie uma nova senha</h2>
+      {error ? <div className="notice error" role="alert">{error}</div> : null}
+      <form onSubmit={(event) => { event.preventDefault(); if (mismatch) return; setBusy(true); void changePassword(current, next).finally(() => setBusy(false)); }}>
+        <label className="field">
+          Senha temporária
+          <input type="password" autoComplete="current-password" required value={current} onChange={(event) => setCurrent(event.target.value)} />
+        </label>
+        <label className="field">
+          Nova senha
+          <input type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={next} onChange={(event) => setNext(event.target.value)} />
+        </label>
+        <label className="field">
+          Confirme a nova senha
+          <input type="password" autoComplete="new-password" required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+        </label>
+        {mismatch ? <div className="notice error">As senhas não coincidem.</div> : null}
+        <div className="actions" style={{ marginTop: 12 }}>
+          <button type="button" className="button secondary" onClick={() => void logout()}>Sair</button>
+          <button className="button" disabled={busy || mismatch}>{busy ? "Salvando..." : "Trocar senha"}</button>
+        </div>
+      </form>
+    </section>
+  );
 }

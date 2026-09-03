@@ -66,7 +66,7 @@ Cada tarefa usa RED → GREEN → refatoração → gates → commit atômico. `
   escopo contábil lógico, com teste de conflito explícito — `PDFCSV-012`.
 - [x] `T72` Modelar grupos de ambiguidade com candidatos comparáveis e motivos
   auditáveis — `PDFCSV-011`, `PDFCSV-013`.
-- [ ] `T73` Implementar aprovação e rejeição auditável de sugestões 1:N e N:1,
+- [x] `T73` Implementar aprovação e rejeição auditável de sugestões 1:N e N:1,
   mantendo-as fora dos totais até a decisão — `PDFCSV-013`.
 - [ ] `T74` Consolidar indicadores e evidência na interface e no XLSX,
   definindo a política de visualização temporária de documentos — `PDFCSV-014`.

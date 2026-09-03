@@ -101,7 +101,9 @@ Ao retomar:
 4. `T72` foi concluída: itens ambíguos compartilham um grupo determinístico com
    todos os candidatos de razão e extrato, motivo e evidência no XLSX; continuam
    exclusivamente em revisão e fora dos totais automáticos;
-5. executar `T73`, iniciando por aprovação e rejeição auditável das sugestões
-   1:N e N:1, sem alterar totais antes da decisão;
-6. atualizar este arquivo e as matrizes de suporte ao fim de cada ciclo;
-7. nunca marcar um resultado contábil esperado sem oráculo privado revisado.
+5. `T73` foi concluída: revisor ou administrador pode aprovar ou rejeitar
+   sugestões 1:N e N:1; a rejeição exige justificativa e toda decisão gera
+   auditoria. Somente a aprovação torna o grupo uma conciliação manual;
+6. executar `T74`, consolidando indicadores e evidências na interface e no XLSX;
+7. atualizar este arquivo e as matrizes de suporte ao fim de cada ciclo;
+8. nunca marcar um resultado contábil esperado sem oráculo privado revisado.

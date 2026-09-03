@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   AuthorizationError,
+  decimalString,
   ExceptionService,
   InMemoryAuditRepository,
   InMemoryReconciliationRunRepository,
+  SuggestionDecisionService,
   WorkflowRuleError,
   WorkflowService,
+  summarizeReconciliationRun,
   type ActorContext,
   type ReconciliationRun,
 } from "../../src/index.js";
@@ -125,5 +128,77 @@ describe("BR-11/BR-12 — exceções, workflow e autorização", () => {
     await expect(workflow.transition("run-1", "START_REVIEW", outsider)).rejects.toBeInstanceOf(
       AuthorizationError,
     );
+  });
+
+  it("confirma sugestão 1:N somente na revisão e só então a inclui como conciliação manual", async () => {
+    const run = runFixture();
+    run.matchGroups.push({
+      id: "suggestion-1",
+      reconciliationRunId: run.id,
+      ruleId: "RF-04",
+      cardinality: "ONE_TO_MANY",
+      confidence: 0.91,
+      matchedStatementIds: ["statement-1"],
+      matchedLedgerIds: ["ledger-1", "ledger-2"],
+      amountDifference: decimalString("0.00"),
+      status: "SUGGESTED",
+      createdAt: now,
+    });
+    await runs.save(run);
+
+    expect(summarizeReconciliationRun(run)).toMatchObject({ manualMatches: 0, suggestions: 1 });
+
+    const updated = await new SuggestionDecisionService(runs, audit, () => now).execute(
+      run.id,
+      "suggestion-1",
+      "APPROVE",
+      {},
+      reviewer,
+    );
+
+    expect(updated).toMatchObject({ status: "MANUALLY_CONFIRMED", actorId: reviewer.actorId });
+    expect(summarizeReconciliationRun((await runs.findById(run.id))!)).toMatchObject({ manualMatches: 1, suggestions: 0 });
+    expect(await audit.list("MATCH_GROUP", "suggestion-1")).toMatchObject([
+      expect.objectContaining({
+        action: "MATCH_GROUP_APPROVE",
+        actorId: reviewer.actorId,
+        before: { status: "SUGGESTED", actorId: undefined },
+        after: { status: "MANUALLY_CONFIRMED", actorId: reviewer.actorId },
+      }),
+    ]);
+  });
+
+  it("exige revisor e justificativa para rejeitar uma sugestão", async () => {
+    const run = runFixture();
+    run.matchGroups.push({
+      id: "suggestion-1",
+      reconciliationRunId: run.id,
+      ruleId: "RF-05",
+      cardinality: "MANY_TO_ONE",
+      confidence: 0.88,
+      matchedStatementIds: ["statement-1", "statement-2"],
+      matchedLedgerIds: ["ledger-1"],
+      amountDifference: decimalString("0.00"),
+      status: "SUGGESTED",
+      createdAt: now,
+    });
+    await runs.save(run);
+    const service = new SuggestionDecisionService(runs, audit, () => now);
+
+    await expect(service.execute(run.id, "suggestion-1", "REJECT", { comment: "Não representa o lançamento consolidado" }, preparer))
+      .rejects.toBeInstanceOf(AuthorizationError);
+    await expect(service.execute(run.id, "suggestion-1", "REJECT", {}, reviewer))
+      .rejects.toThrow("A rejeição da sugestão exige uma justificativa");
+
+    const rejected = await service.execute(
+      run.id,
+      "suggestion-1",
+      "REJECT",
+      { comment: "Não representa o lançamento consolidado" },
+      reviewer,
+    );
+
+    expect(rejected).toMatchObject({ status: "REJECTED", actorId: reviewer.actorId });
+    expect(summarizeReconciliationRun((await runs.findById(run.id))!)).toMatchObject({ manualMatches: 0, suggestions: 0 });
   });
 });

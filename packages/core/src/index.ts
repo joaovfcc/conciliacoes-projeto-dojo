@@ -143,6 +143,7 @@ export * from "./reconciliation/domain/ReconciliationEngine.js";
 export * from "./reconciliation/application/ReconcileTransactionsUseCase.js";
 export * from "./reconciliation/application/WorkflowService.js";
 export * from "./reconciliation/application/ExceptionService.js";
+export * from "./reconciliation/application/SuggestionDecisionService.js";
 export * from "./reconciliation/application/ReconciliationReport.js";
 export * from "./reconciliation/infrastructure/InMemoryReconciliationRunRepository.js";
 export * from "./reconciliation/domain/CompletedReconciliation.js";

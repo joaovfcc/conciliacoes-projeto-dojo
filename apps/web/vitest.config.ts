@@ -11,6 +11,8 @@ export default defineConfig({
     alias: {
       "@": path.resolve(currentDirectory, "src"),
       "@conciliacao/core/presentation": path.resolve(currentDirectory, "../../packages/core/src/presentation.ts"),
+      "@conciliacao/core/normalization": path.resolve(currentDirectory, "../../packages/core/src/normalization.ts"),
+      "@conciliacao/core/bank-directory": path.resolve(currentDirectory, "../../packages/core/src/bank-directory.ts"),
       "@conciliacao/core": path.resolve(currentDirectory, "../../packages/core/src/index.ts"),
       "@conciliacao/runtime": path.resolve(currentDirectory, "../../packages/runtime/src/index.ts"),
     },

@@ -18,6 +18,26 @@
       "types": "./src/presentation.ts",
       "import": "./dist/src/presentation.js",
       "default": "./dist/src/presentation.js"
+    },
+    "./normalization": {
+      "types": "./src/normalization.ts",
+      "import": "./dist/src/normalization.js",
+      "default": "./dist/src/normalization.js"
+    },
+    "./normalization.js": {
+      "types": "./src/normalization.ts",
+      "import": "./dist/src/normalization.js",
+      "default": "./dist/src/normalization.js"
+    },
+    "./bank-directory": {
+      "types": "./src/bank-directory.ts",
+      "import": "./dist/src/bank-directory.js",
+      "default": "./dist/src/bank-directory.js"
+    },
+    "./bank-directory.js": {
+      "types": "./src/bank-directory.ts",
+      "import": "./dist/src/bank-directory.js",
+      "default": "./dist/src/bank-directory.js"
     }
   },
   "scripts": {

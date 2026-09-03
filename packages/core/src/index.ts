@@ -72,6 +72,7 @@ export type {
 } from "./configuration/index.js";
 export * from "./presentation.js";
 export * from "./normalization.js";
+export * from "./bank-directory.js";
 export * from "./reconciliation.js";
 export * from "./parsers/types.js";
 export * from "./preflight.js";

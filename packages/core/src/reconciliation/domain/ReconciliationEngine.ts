@@ -42,6 +42,7 @@ export const RECONCILIATION_CONFIGURATION_V1: ReconciliationConfigurationV1 = Ob
 export type ReconciliationSource = "BANK" | "LEDGER";
 export type ReconciliationStatus =
   | "RECONCILED_EXACT"
+  | "RECONCILED_UNIQUE_VALUE"
   | "RECONCILED_DATE_WINDOW"
   | "RECONCILED_GROUP"
   | "RECONCILED_DAILY_TOTAL"
@@ -82,7 +83,7 @@ export interface ReconciliationTransaction {
 }
 
 export type MatchRuleId = "RF-01" | "RF-02" | "RF-03" | "RF-04" | "RF-05" | "RF-07" | "RF-08" | "RF-09";
-export type MatchGroupType = "exact" | "date-window" | "one-to-many" | "many-to-one" | "daily-total" | "bank-net-zero";
+export type MatchGroupType = "exact" | "unique-value" | "date-window" | "one-to-many" | "many-to-one" | "daily-total" | "bank-net-zero";
 
 export interface SerializedReconciliationTransaction extends Omit<ReconciliationTransaction, "amountCents" | "tokens"> {
   amountCents: string;
@@ -145,6 +146,13 @@ export interface ReconciliationEngineOptions {
   descriptionSimilarityThreshold?: number;
   allowOneToMany?: boolean;
   allowManyToOne?: boolean;
+  allowDailyTotal?: boolean;
+  /**
+   * Política operacional do produto: dentro da competência selecionada,
+   * um valor só é automático se houver exatamente uma linha em cada origem.
+   * Datas servem como evidência, não como restrição do pareamento.
+   */
+  matchByUniqueValueWithinPeriod?: boolean;
   allowManyToMany?: boolean;
   maxGroupSize?: number;
   collectPerformanceMetrics?: boolean;
@@ -532,19 +540,34 @@ export class ReconciliationEngine {
       }
     }
 
-    const exactLedgers = indexExactCandidates(open(prepared, available, "LEDGER"));
-    for (const bank of open(prepared, available, "BANK")) {
-      const candidate = exactLedgers.get(exactKey(bank))?.takeBest(bank);
-      if (candidate) accept("RF-02", "exact", [bank], [candidate.ledger], "RECONCILED_EXACT", candidate.score);
-    }
+    if (this.options.matchByUniqueValueWithinPeriod) {
+      for (const pair of uniqueValuePairs(open(prepared, available))) {
+        if (available.has(pair.bank.id) && available.has(pair.ledger.id)) {
+          accept(
+            "RF-02",
+            pair.sameDate ? "exact" : "unique-value",
+            [pair.bank],
+            [pair.ledger],
+            pair.sameDate ? "RECONCILED_EXACT" : "RECONCILED_UNIQUE_VALUE",
+            1,
+          );
+        }
+      }
+    } else {
+      const exactLedgers = indexExactCandidates(open(prepared, available, "LEDGER"));
+      for (const bank of open(prepared, available, "BANK")) {
+        const candidate = exactLedgers.get(exactKey(bank))?.takeBest(bank);
+        if (candidate) accept("RF-02", "exact", [bank], [candidate.ledger], "RECONCILED_EXACT", candidate.score);
+      }
 
-    const windowLedgers = indexWindowCandidates(open(prepared, available, "LEDGER"));
-    for (const bank of open(prepared, available, "BANK")) {
-      const candidate = windowLedgers.get(financialKey(bank))?.takeBest(bank, this.dateToleranceDays, configuration);
-      if (!candidate) continue;
-      rf03SignatureGroupsEvaluated += candidate.signatureGroupsEvaluated;
-      if (candidate.selected) {
-        accept("RF-03", "date-window", [bank], [candidate.selected.ledger], "RECONCILED_DATE_WINDOW", candidate.selected.score);
+      const windowLedgers = indexWindowCandidates(open(prepared, available, "LEDGER"));
+      for (const bank of open(prepared, available, "BANK")) {
+        const candidate = windowLedgers.get(financialKey(bank))?.takeBest(bank, this.dateToleranceDays, configuration);
+        if (!candidate) continue;
+        rf03SignatureGroupsEvaluated += candidate.signatureGroupsEvaluated;
+        if (candidate.selected) {
+          accept("RF-03", "date-window", [bank], [candidate.selected.ledger], "RECONCILED_DATE_WINDOW", candidate.selected.score);
+        }
       }
     }
 
@@ -572,21 +595,24 @@ export class ReconciliationEngine {
       }
     }
 
-    const daily = indexTransactions(open(prepared, available), dailyKey);
-    for (const key of [...daily.keys()].sort()) {
-      const residue = daily.get(key)!.filter((item) => available.has(item.id));
-      const bank = residue.filter((item) => item.source === "BANK");
-      const ledger = residue.filter((item) => item.source === "LEDGER");
-      if (bank.length > 0 && ledger.length > 0 && total(bank) === total(ledger)) {
-        if (bank.length === 1 && ledger.length === 1 && hasDivergentDocument(bank[0]!, ledger[0]!)) {
-          continue;
+    if (this.options.allowDailyTotal !== false) {
+      const daily = indexTransactions(open(prepared, available), dailyKey);
+      for (const key of [...daily.keys()].sort()) {
+        const residue = daily.get(key)!.filter((item) => available.has(item.id));
+        const bank = residue.filter((item) => item.source === "BANK");
+        const ledger = residue.filter((item) => item.source === "LEDGER");
+        if (bank.length > 0 && ledger.length > 0 && total(bank) === total(ledger)) {
+          if (bank.length === 1 && ledger.length === 1 && hasDivergentDocument(bank[0]!, ledger[0]!)) {
+            continue;
+          }
+          accept("RF-07", "daily-total", bank, ledger, "RECONCILED_DAILY_TOTAL");
         }
-        accept("RF-07", "daily-total", bank, ledger, "RECONCILED_DAILY_TOTAL");
       }
     }
 
-    for (const key of [...daily.keys()].sort()) {
-      const residue = daily.get(key)!.filter((item) => available.has(item.id));
+    const dailyForNetZero = indexTransactions(open(prepared, available), dailyKey);
+    for (const key of [...dailyForNetZero.keys()].sort()) {
+      const residue = dailyForNetZero.get(key)!.filter((item) => available.has(item.id));
       const bank = residue.filter((item) => item.source === "BANK");
       const ledger = residue.filter((item) => item.source === "LEDGER");
       if (bank.length >= 2 && ledger.length === 0 && total(bank) === 0n) {
@@ -647,7 +673,7 @@ export type MatchRule =
   | "RULE_7_DAILY_TOTAL" | "RULE_8_BANK_NET_ZERO" | "RULE_1_AUTO_APPLICATION";
 
 export type MatchStatus =
-  | "AUTO_MATCH_EXACT" | "AUTO_MATCH_DATE_TOLERANCE" | "AUTO_MATCH_VALUE_DATE" | "AUTO_MATCH_DESCRIPTION"
+  | "AUTO_MATCH_EXACT" | "AUTO_MATCH_UNIQUE_VALUE" | "AUTO_MATCH_DATE_TOLERANCE" | "AUTO_MATCH_VALUE_DATE" | "AUTO_MATCH_DESCRIPTION"
   | "AUTO_MATCH_GROUP" | "AUTO_MATCH_DAILY_TOTAL" | "BANK_NET_ZERO" | "AUTO_APPLICATION_EXCLUDED"
   | "GROUP_SUGGESTION" | "VALUE_ONLY_SUGGESTION" | "VALUE_DIVERGENCE" | "DATE_DIVERGENCE"
   | "AMBIGUOUS_MATCH" | "LEDGER_WITHOUT_STATEMENT" | "STATEMENT_WITHOUT_LEDGER";
@@ -765,6 +791,51 @@ function financialKey(transaction: PreparedTransaction): string {
 
 function exactKey(transaction: PreparedTransaction): string {
   return `${financialKey(transaction)}\u0000${transaction.postingDate}`;
+}
+
+type UniqueValuePair = {
+  bank: PreparedTransaction;
+  ledger: PreparedTransaction;
+  sameDate: boolean;
+};
+
+function uniqueValuePairs(transactions: PreparedTransaction[]): UniqueValuePair[] {
+  const pairs: UniqueValuePair[] = [];
+  const buckets = indexTransactions(transactions, financialKey);
+  for (const key of [...buckets.keys()].sort()) {
+    const entries = buckets.get(key)!;
+    const bank = entries.filter((item) => item.source === "BANK");
+    const ledger = entries.filter((item) => item.source === "LEDGER");
+    const pairedIds = new Set<string>();
+    const banksByDocument = indexTransactions(bank.filter((item) => Boolean(item.documentId)), documentKey);
+    const ledgersByDocument = indexTransactions(ledger.filter((item) => Boolean(item.documentId)), documentKey);
+
+    for (const document of [...banksByDocument.keys()].sort()) {
+      const bankMatches = banksByDocument.get(document)!;
+      const ledgerMatches = ledgersByDocument.get(document) ?? [];
+      if (bankMatches.length !== 1 || ledgerMatches.length !== 1) continue;
+      const bankMatch = bankMatches[0]!;
+      const ledgerMatch = ledgerMatches[0]!;
+      pairs.push({ bank: bankMatch, ledger: ledgerMatch, sameDate: bankMatch.postingDate === ledgerMatch.postingDate });
+      pairedIds.add(bankMatch.id);
+      pairedIds.add(ledgerMatch.id);
+    }
+
+    const remainingBank = bank.filter((item) => !pairedIds.has(item.id));
+    const remainingLedger = ledger.filter((item) => !pairedIds.has(item.id));
+    if (remainingBank.length === 1 && remainingLedger.length === 1 && !hasDivergentDocument(remainingBank[0]!, remainingLedger[0]!)) {
+      pairs.push({
+        bank: remainingBank[0]!,
+        ledger: remainingLedger[0]!,
+        sameDate: remainingBank[0]!.postingDate === remainingLedger[0]!.postingDate,
+      });
+    }
+  }
+  return pairs;
+}
+
+function documentKey(transaction: PreparedTransaction): string {
+  return transaction.documentId ? normalizeDocumentId(transaction.documentId) : "";
 }
 
 function groupKey(transaction: PreparedTransaction): string {
@@ -1266,7 +1337,8 @@ function legacyGroupResult(
   const ledgers = group.ledgerTransactionIds.map((id) => ledgerById.get(id)!).filter(Boolean);
   const statements = group.bankTransactionIds.map((id) => statementById.get(id)!).filter(Boolean);
   const status: MatchStatus = group.type === "exact" ? "AUTO_MATCH_EXACT"
-    : group.type === "date-window" ? "AUTO_MATCH_DATE_TOLERANCE"
+    : group.type === "unique-value" ? "AUTO_MATCH_UNIQUE_VALUE"
+      : group.type === "date-window" ? "AUTO_MATCH_DATE_TOLERANCE"
       : group.type === "daily-total" ? "AUTO_MATCH_DAILY_TOTAL"
         : group.type === "bank-net-zero" ? "BANK_NET_ZERO" : "AUTO_MATCH_GROUP";
   const rule: MatchRule = group.ruleId === "RF-02" ? "RULE_1_EXACT"

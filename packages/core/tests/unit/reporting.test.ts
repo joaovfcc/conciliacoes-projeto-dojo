@@ -30,7 +30,7 @@ describe("exportação XLSX", () => {
     await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
       "Resumo", "Controles consolidados", "Cobertura e status", "Pendências por data", "Controles de integridade",
-      "Conciliações exatas", "Conciliações proximidade", "Conciliações em grupo", "Totais diários", "Compensados no extrato", "Aplicações automáticas", "Sugestões", "Divergências",
+      "Conciliações automáticas", "Conciliações proximidade", "Conciliações em grupo", "Totais diários", "Compensados no extrato", "Aplicações automáticas", "Sugestões de agrupamento", "Sugestões", "Divergências",
       "Razão sem extrato", "Extrato sem razão", "Ambiguidades", "Duplicidades", "Documentos processados",
       "Documentos bloqueados", "Investimentos e posições", "Erros técnicos", "Auditoria do motor",
     ]);

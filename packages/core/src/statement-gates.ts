@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 
+import { compareBankAccountIdentities } from "./normalization.js";
 import {
   createSourceProvenance,
   isReconciliationEligibleDocumentType,
@@ -154,23 +155,23 @@ function identityGate(
     return gate("IDENTITY", "REVIEW_REQUIRED", ["BANK_ACCOUNT_CONFIRMATION_REQUIRED"]);
   }
   if (expected) {
-    const mismatches = [
-      identityMismatch(expected.account, document.identity.account?.normalized),
-      identityMismatch(expected.agency, document.identity.agency?.normalized),
-      identityMismatch(expected.bankCode, document.institutionCode),
-    ];
-    if (mismatches.some(Boolean)) return gate("IDENTITY", "FAILED", ["BANK_ACCOUNT_IDENTITY_MISMATCH"]);
+    const comparison = compareBankAccountIdentities(
+      {
+        ...(expected.bankCode ? { bank: expected.bankCode } : {}),
+        ...(expected.agency ? { agency: expected.agency } : {}),
+        ...(expected.account ? { account: expected.account } : {}),
+      },
+      {
+        bank: document.identity.bankCode || document.institutionCode || document.identity.bankName,
+        ...(document.identity.agency?.normalized ? { agency: document.identity.agency.normalized } : {}),
+        ...(document.identity.account?.raw || document.identity.account?.normalized
+          ? { account: document.identity.account.raw || document.identity.account.normalized }
+          : {}),
+      },
+    );
+    if (comparison.status === "CONFLICT") return gate("IDENTITY", "FAILED", ["BANK_ACCOUNT_IDENTITY_MISMATCH"]);
   }
   return gate("IDENTITY", "PASSED");
-}
-
-function identityMismatch(expected: string | undefined, actual: string | undefined): boolean {
-  if (!expected || !actual || actual === "UNCONFIRMED") return false;
-  const normalize = (value: string) => {
-    const compact = value.normalize("NFKD").replace(/\p{Diacritic}/gu, "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-    return /^\d+$/.test(compact) ? compact.replace(/^0+(?=\d)/, "") : compact;
-  };
-  return normalize(expected) !== normalize(actual);
 }
 
 function periodGate(document: CanonicalStatementDocument): StatementGateResult {

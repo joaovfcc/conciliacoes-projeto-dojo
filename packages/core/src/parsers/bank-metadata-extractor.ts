@@ -1,5 +1,6 @@
 import { normalizeText, extractDigits } from "./text-normalization.js";
 import { normalizeCode } from "../normalization.js";
+import { resolveBankInstitution } from "../bank-directory.js";
 
 export interface BankMetadataCandidate {
   bank?: string;
@@ -9,27 +10,6 @@ export interface BankMetadataCandidate {
   confidence: number;
   evidence: string[];
 }
-
-/**
- * Standard known Brazilian banks mapping (name tokens -> canonical code and normalized name)
- */
-const KNOWN_BANKS: Array<{ tokens: string[]; code: string; name: string }> = [
-  { tokens: ["santander", "033"], code: "033", name: "SANTANDER" },
-  { tokens: ["itau", "unibanco", "341"], code: "341", name: "ITAU" },
-  { tokens: ["bradesco", "237"], code: "237", name: "BRADESCO" },
-  { tokens: ["brasil", "banco do brasil", "001", "bb"], code: "001", name: "BANCO_DO_BRASIL" },
-  { tokens: ["caixa", "economica", "104", "cef"], code: "104", name: "CAIXA" },
-  { tokens: ["inter", "banco inter", "077"], code: "077", name: "INTER" },
-  { tokens: ["nubank", "nu pagamentos", "260"], code: "260", name: "NUBANK" },
-  { tokens: ["sofisa", "637"], code: "637", name: "SOFISA" },
-  { tokens: ["brb", "banco de brasilia", "070"], code: "070", name: "BRB" },
-  { tokens: ["daycoval", "707"], code: "707", name: "DAYCOVAL" },
-  { tokens: ["safra", "422"], code: "422", name: "SAFRA" },
-  { tokens: ["sicredi", "748"], code: "748", name: "SICREDI" },
-  { tokens: ["sicoob", "756"], code: "756", name: "SICOOB" },
-  { tokens: ["original", "212"], code: "212", name: "ORIGINAL" },
-  { tokens: ["btg", "btg pactual", "208"], code: "208", name: "BTG" },
-];
 
 /**
  * Words that must NEVER be accepted as account or agency numbers
@@ -87,17 +67,12 @@ export function isValidAgencyNumber(raw: string | undefined): boolean {
  * Identifies a known bank from text tokens
  */
 export function detectBankFromText(text: string): { bank?: string; bankCode?: string } | undefined {
-  const normalized = normalizeText(text);
-  for (const entry of KNOWN_BANKS) {
-    for (const token of entry.tokens) {
-      // Check word boundary in normalized text
-      const regex = new RegExp(`(?:^|\\s)${token}(?:$|\\s)`, "i");
-      if (regex.test(normalized)) {
-        return { bank: entry.name, bankCode: entry.code };
-      }
-    }
-  }
-  return undefined;
+  const institution = resolveBankInstitution(text);
+  if (!institution) return undefined;
+  return {
+    bank: institution.canonicalName,
+    ...(institution.bankCode ? { bankCode: institution.bankCode } : {}),
+  };
 }
 
 /**

@@ -10,6 +10,7 @@ export const BB_CHECKING_XLSX_V1: StatementLayoutProfile = {
 
   detection: {
     sheetNameAliases: ["banco do brasil"],
+    institutionPatterns: ["banco do brasil"],
     requiredHeaderGroups: [
       ["data", "data mov.", "data movimento", "dt balancete", "data balancete"],
       ["histórico", "descrição", "lançamento"],

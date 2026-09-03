@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ReconciliationApp } from "../../src/components/reconciliation-app";
+import { ReconciliationApp, confirmedIdentityMappings, confirmedMappings } from "../../src/components/reconciliation-app";
 
 afterEach(() => {
   cleanup();
@@ -10,6 +10,18 @@ afterEach(() => {
 });
 
 describe("ReconciliationApp", () => {
+  it("exige confirmação explícita para incluir uma conta física divergente no escopo lógico", () => {
+    const detected = preflight();
+    detected.statements[0]!.account = "0003802-4";
+    const mappings = { statement: "111" };
+
+    expect(confirmedIdentityMappings(detected, mappings)).toBe(false);
+    expect(confirmedIdentityMappings(detected, mappings, { statement: true })).toBe(true);
+    expect(confirmedMappings(detected, mappings, { statement: true })[0]?.linkedPhysicalAccounts).toEqual([
+      { statementFileId: "statement", bank: "ITAU", agency: "0191", account: "0003802-4", role: "LINKED" },
+    ]);
+  });
+
   it("apresenta o painel operacional de conciliação e métricas", () => {
     renderApp();
     expect(screen.getByText("Retenção")).toBeInTheDocument();
@@ -83,8 +95,11 @@ describe("ReconciliationApp", () => {
     expect(screen.getByRole("tab", { name: "Grupos" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Total diário" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Compensados" })).toBeInTheDocument();
-    expect(screen.getByText("Banco conciliável (líquido)")).toBeInTheDocument();
-    expect(screen.getByText("Cobertura geral operacional")).toBeInTheDocument();
+    expect(screen.getByText("Movimentação do banco (líquida)")).toBeInTheDocument();
+    expect(screen.getByText("Cobertura confirmada")).toBeInTheDocument();
+    expect(screen.getByText("Cobertura potencial")).toBeInTheDocument();
+    expect(screen.getByText("Linhas em sugestões")).toBeInTheDocument();
+    expect(screen.getByText("Ambiguidades por valor")).toBeInTheDocument();
     expect(screen.getByText("Cobertura do razão")).toBeInTheDocument();
     expect(screen.getByText("Cobertura do extrato operacional")).toBeInTheDocument();
     for (const [tab, status] of [
@@ -104,7 +119,7 @@ describe("ReconciliationApp", () => {
       }
       if (tab === "Total diário") expect(screen.getByText(/não representa pareamento individual/)).toBeInTheDocument();
     }
-    fireEvent.click(screen.getByRole("tab", { name: "Exatos" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Automáticos" }));
     expect(screen.getByText("Regra 1 — documento, data e valor exatos")).toBeInTheDocument();
     expect(screen.queryByText("AUTO_MATCH_EXACT")).not.toBeInTheDocument();
     expect(screen.queryByText("RULE_1_EXACT")).not.toBeInTheDocument();

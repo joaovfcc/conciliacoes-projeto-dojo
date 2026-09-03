@@ -9,6 +9,7 @@ import type {
   ReconciliationResult,
   SignProfile,
 } from "@conciliacao/core";
+import { bankAccountsMatch, compareBankAccountIdentities } from "@conciliacao/core/normalization";
 import {
   bankLabel,
   documentKindLabel,
@@ -52,9 +53,10 @@ type HistoryItem = {
 const sessionTokenHeader = "X-Reconciliation-Session-Token";
 
 export const tabs = [
-  { id: "EXATOS", label: "Exatos", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_EXACT" },
+  { id: "EXATOS", label: "Automáticos", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_EXACT" || item.status === "AUTO_MATCH_UNIQUE_VALUE" },
   { id: "PROXIMIDADE", label: "Proximidade", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_DATE_TOLERANCE" },
   { id: "GRUPOS", label: "Grupos", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_GROUP" },
+  { id: "SUGESTOES_GRUPOS", label: "Sugestões de grupos", test: (item: ReconciliationResult) => item.status === "GROUP_SUGGESTION" },
   { id: "TOTAL_DIARIO", label: "Total diário", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_DAILY_TOTAL" },
   { id: "COMPENSADOS", label: "Compensados", test: (item: ReconciliationResult) => item.status === "BANK_NET_ZERO" },
   { id: "APLICACOES", label: "Aplicações automáticas", test: (item: ReconciliationResult) => item.status === "AUTO_APPLICATION_EXCLUDED" },
@@ -88,6 +90,7 @@ export function ReconciliationApp({
   const [dateToleranceDays, setDateToleranceDays] = useState("2");
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [statementMappings, setStatementMappings] = useState<Record<string, string>>({});
+  const [linkedPhysicalStatementIds, setLinkedPhysicalStatementIds] = useState<Record<string, boolean>>({});
   const [company, setCompany] = useState("");
   const [branch, setBranch] = useState("");
   const [period, setPeriod] = useState("");
@@ -223,28 +226,8 @@ export function ReconciliationApp({
         : (detected.detectedPeriods[0]?.period ?? "");
     setPeriod(detectedPeriod);
 
-    // Auto-match statement mappings with detected ledger accounts
-    const autoMappings: Record<string, string> = {};
-    const eligibleStatements = detected.statements.filter((s) => s.reconciliationEligible);
-
-    for (const statement of eligibleStatements) {
-      const matched = detected.ledgerAccounts.find(
-        (la) =>
-          la.agency &&
-          statement.agency &&
-          la.agency.replace(/\D/g, "") === statement.agency.replace(/\D/g, "") &&
-          la.bankAccount &&
-          statement.account &&
-          la.bankAccount.replace(/\D/g, "") === statement.account.replace(/\D/g, ""),
-      );
-      if (matched) {
-        autoMappings[statement.fileId] = matched.account;
-      } else if (detected.ledgerAccounts.length === 1) {
-        autoMappings[statement.fileId] = detected.ledgerAccounts[0]!.account;
-      }
-    }
-
-    setStatementMappings(autoMappings);
+    setStatementMappings(proposeStatementMappings(detected));
+    setLinkedPhysicalStatementIds({});
     setStage("CONFIRM");
   }
 
@@ -326,7 +309,7 @@ export function ReconciliationApp({
 
   async function confirmAndProcess(): Promise<void> {
     if (!credential || !preflight) return;
-    const mappings = confirmedMappings(preflight, statementMappings);
+    const mappings = confirmedMappings(preflight, statementMappings, linkedPhysicalStatementIds);
     if (!period) {
       setError("Confirme a competência antes de iniciar a conciliação.");
       return;
@@ -596,6 +579,8 @@ export function ReconciliationApp({
                 setPeriod={setPeriod}
                 statementMappings={statementMappings}
                 setStatementMappings={setStatementMappings}
+                linkedPhysicalStatementIds={linkedPhysicalStatementIds}
+                setLinkedPhysicalStatementIds={setLinkedPhysicalStatementIds}
                 valueTolerance={valueTolerance}
                 setValueTolerance={setValueTolerance}
                 dateToleranceDays={dateToleranceDays}
@@ -1474,6 +1459,8 @@ function Confirmation(props: {
   setPeriod: (value: string) => void;
   statementMappings: Record<string, string>;
   setStatementMappings: (value: Record<string, string>) => void;
+  linkedPhysicalStatementIds: Record<string, boolean>;
+  setLinkedPhysicalStatementIds: (value: Record<string, boolean>) => void;
   valueTolerance: string;
   setValueTolerance: (value: string) => void;
   dateToleranceDays: string;
@@ -1486,14 +1473,16 @@ function Confirmation(props: {
   const currentAccountStatements = props.preflight.statements.filter((item) => item.reconciliationEligible);
   const investmentStatements = props.preflight.statements.filter((item) => !item.reconciliationEligible);
   const blocked = props.preflight.issues.some((item) => item.severity === "ERROR");
-  const mappedStatementCount = confirmedMappings(props.preflight, props.statementMappings).reduce(
+  const mappedStatementCount = confirmedMappings(props.preflight, props.statementMappings, props.linkedPhysicalStatementIds).reduce(
     (acc, m) => acc + m.statementFileIds.length,
     0,
   );
   const mappingsComplete = mappedStatementCount === currentAccountStatements.length;
+  const identityMappingsConfirmed = confirmedIdentityMappings(props.preflight, props.statementMappings, props.linkedPhysicalStatementIds);
+  const hasPartialIdentity = partialIdentityMappings(props.preflight, props.statementMappings);
 
   const isAutoMatched =
-    mappingsComplete && props.period !== "" && currentAccountStatements.length > 0 && !blocked;
+    mappingsComplete && identityMappingsConfirmed && props.period !== "" && currentAccountStatements.length > 0 && !blocked && !Object.values(props.linkedPhysicalStatementIds).some(Boolean);
 
   return (
     <section className="card panel">
@@ -1558,7 +1547,7 @@ function Confirmation(props: {
             <button
               type="button"
               className="button"
-              disabled={props.busy || blocked || !mappingsComplete}
+              disabled={props.busy || blocked || !mappingsComplete || !identityMappingsConfirmed}
               onClick={props.submit}
             >
               {props.busy ? "Iniciando conciliação…" : "Iniciar conciliação expressa"}
@@ -1574,6 +1563,18 @@ function Confirmation(props: {
         <Metric label="Extratos de conta" value={currentAccountStatements.length} />
         <Metric label="Documentos de investimento" value={investmentStatements.length} />
       </div>
+
+      {mappingsComplete && !identityMappingsConfirmed && (
+        <div className="notice error" role="alert">
+          Confirme cada conta física divergente como parte do mesmo escopo lógico ou escolha outra conta contábil.
+        </div>
+      )}
+
+      {mappingsComplete && identityMappingsConfirmed && hasPartialIdentity && (
+        <div className="notice warning" role="status">
+          Alguns dados bancários não foram encontrados. O relacionamento selecionado manualmente será usado nesta execução.
+        </div>
+      )}
 
       {props.preflight.issues.map((item, index) => (
         <div
@@ -1617,7 +1618,12 @@ function Confirmation(props: {
       </div>
 
       <h3 style={{ marginTop: "24px", fontSize: "15px" }}>Vínculo dos Extratos Bancários</h3>
-      {currentAccountStatements.map((statement) => (
+      {currentAccountStatements.map((statement) => {
+        const selectedLedger = props.preflight.ledgerAccounts.find((item) => item.account === props.statementMappings[statement.fileId]);
+        const identity = selectedLedger ? compareBankAccountIdentities(selectedLedger, statement) : undefined;
+        const requiresLinkedConfirmation = identity?.status === "CONFLICT";
+        const identityComplete = Boolean(statement.bank && statement.agency && statement.account);
+        return (
         <div className="rule-item" style={{ marginBottom: "8px" }} key={statement.fileId}>
           <div>
             <strong>{statement.originalName}</strong>
@@ -1631,12 +1637,12 @@ function Confirmation(props: {
             <select
               aria-label={`Conta contábil para ${statement.originalName}`}
               value={props.statementMappings[statement.fileId] ?? ""}
-              onChange={(event) =>
+              onChange={(event) => {
                 props.setStatementMappings({
                   ...props.statementMappings,
                   [statement.fileId]: event.target.value,
-                })
-              }
+                });
+              }}
             >
               <option value="">Selecione a conta contábil</option>
               {props.preflight.ledgerAccounts.map((account) => (
@@ -1648,8 +1654,28 @@ function Confirmation(props: {
               ))}
             </select>
           </label>
+          {requiresLinkedConfirmation && (
+            <label className="field" style={{ margin: "8px 0 0", gridColumn: "1 / -1", fontSize: "13px" }}>
+              <span style={{ display: "flex", alignItems: "start", gap: "8px" }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(props.linkedPhysicalStatementIds[statement.fileId])}
+                  disabled={!identityComplete}
+                  onChange={(event) => props.setLinkedPhysicalStatementIds({
+                    ...props.linkedPhysicalStatementIds,
+                    [statement.fileId]: event.target.checked,
+                  })}
+                />
+                <span>
+                  Confirmo que {bankLabel(statement.bank)} / {statement.agency} / {statement.account} é uma conta física vinculada ao mesmo escopo lógico desta conta contábil nesta execução.
+                  {!identityComplete && " A identidade completa da conta é obrigatória para essa confirmação."}
+                </span>
+              </span>
+            </label>
+          )}
         </div>
-      ))}
+        );
+      })}
 
       {investmentStatements.length > 0 && (
         <>
@@ -1684,7 +1710,7 @@ function Confirmation(props: {
         </button>
         <button
           className="button"
-          disabled={props.busy || blocked || !mappingsComplete}
+          disabled={props.busy || blocked || !mappingsComplete || !identityMappingsConfirmed}
           onClick={props.submit}
         >
           {props.busy ? "Processando…" : "Confirmar e conciliar"}
@@ -1718,6 +1744,8 @@ function Results(props: {
   }, [props.activeTab, props.search]);
 
   const controls = props.result.controls;
+  const countByStatus = (status: ReconciliationResult["status"]): string =>
+    controls?.countsByStatus.find((item) => item.status === status)?.count ?? "0";
   const totals = props.result.summaries.reduce(
     (sum, item) => ({
       reconciled: sum.reconciled + item.reconciledCount,
@@ -1790,18 +1818,35 @@ function Results(props: {
         {controls ? (
           <div className="summary-grid">
             <Metric
-              label="Banco conciliável (líquido)"
+              label="Movimentação do banco (líquida)"
               value={formatCurrency(Number(controls.movements.bankConciliable))}
             />
-            <Metric label="Razão conciliável (líquido)" value={formatCurrency(Number(controls.movements.ledger))} />
+            <Metric label="Movimentação do razão (líquida)" value={formatCurrency(Number(controls.movements.ledger))} />
             <Metric
               label="Diferença banco × razão"
               value={formatCurrency(Number(controls.movements.difference))}
             />
             <Metric
-              label="Cobertura geral operacional"
+              label="Cobertura confirmada"
               value={`${controls.coverage.overallOperational?.lines.percentage ?? controls.coverage.lines.percentage}% (${controls.coverage.overallOperational?.lines.covered ?? controls.coverage.lines.covered}/${controls.coverage.overallOperational?.lines.total ?? controls.coverage.lines.total})`}
             />
+            <Metric
+              label="Cobertura potencial"
+              value={
+                controls.coverage.potential?.overallOperational
+                  ? `${controls.coverage.potential.overallOperational.lines.percentage}% (${controls.coverage.potential.overallOperational.lines.covered}/${controls.coverage.potential.overallOperational.lines.total})`
+                  : "Não disponível"
+              }
+            />
+            <Metric
+              label="Linhas em sugestões"
+              value={
+                controls.coverage.suggested?.overallOperational
+                  ? `${controls.coverage.suggested.overallOperational.lines.covered} para revisão`
+                  : "0"
+              }
+            />
+            <Metric label="Ambiguidades por valor" value={countByStatus("AMBIGUOUS_MATCH")} />
             <Metric
               label="Cobertura do razão"
               value={
@@ -1882,6 +1927,18 @@ function Results(props: {
             {props.activeTab === "TOTAL_DIARIO" && (
               <div className="notice warning">
                 O total diário comprova o fechamento do lote; não representa pareamento individual entre as linhas.
+              </div>
+            )}
+
+            {props.activeTab === "SUGESTOES_GRUPOS" && (
+              <div className="notice warning">
+                Estas combinações fecham em centavos e foram agrupadas de forma determinística, mas não entram nos totais conciliados até a conferência manual.
+              </div>
+            )}
+
+            {props.activeTab === "AMBIGUIDADES" && (
+              <div className="notice warning">
+                Cada grupo reúne todos os candidatos com o mesmo valor. A aplicação não escolhe nenhum par enquanto a evidência não tornar a decisão inequívoca.
               </div>
             )}
 
@@ -2059,6 +2116,11 @@ function Evidence({ item, close }: { item: ReconciliationResult; close: () => vo
         <div>
           <h3>Evidência · identificador técnico {item.id}</h3>
           <p>{item.reason}</p>
+          {item.ambiguityGroup && (
+            <p>
+              Grupo de ambiguidade: {item.ambiguityGroup.ledgerCandidateIds.length} linha(s) do razão e {item.ambiguityGroup.statementCandidateIds.length} linha(s) do extrato com o valor {formatCurrency(Number(item.ambiguityGroup.amount))}.
+            </p>
+          )}
           {item.status === "AUTO_MATCH_DAILY_TOTAL" && (
             <p>Fechamento no nível do lote diário, sem pareamento individual.</p>
           )}
@@ -2125,6 +2187,7 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 export function confirmedMappings(
   preflight: PreflightResult,
   statementMappings: Record<string, string>,
+  linkedPhysicalStatementIds: Record<string, boolean> = {},
 ): AccountMapping[] {
   const eligible = preflight.statements.filter((item) => item.reconciliationEligible);
   const byAccount = new Map<string, string[]>();
@@ -2145,14 +2208,69 @@ export function confirmedMappings(
         ? "BANK_LIABILITY"
         : "BANK_ASSET";
 
+    const linkedPhysicalAccounts = statementFileIds.flatMap((fileId) => {
+      const statement = preflight.statements.find((item) => item.fileId === fileId);
+      return linkedPhysicalStatementIds[fileId] && statement && statement.bank && statement.agency && statement.account
+        ? [{ statementFileId: fileId, bank: statement.bank, agency: statement.agency, account: statement.account, role: "LINKED" as const }]
+        : [];
+    });
     mappings.push({
       ledgerAccount: account,
       statementFileIds,
       signProfile,
+      ...(linkedPhysicalAccounts.length ? { linkedPhysicalAccounts } : {}),
     });
   }
 
   return mappings;
+}
+
+export function proposeStatementMappings(preflight: PreflightResult): Record<string, string> {
+  const mappings: Record<string, string> = {};
+  for (const statement of preflight.statements.filter((item) => item.reconciliationEligible)) {
+    const registeredAccounts = new Set(
+      (preflight.registeredAccountMappings ?? [])
+        .filter((mapping) => bankAccountsMatch(mapping, statement))
+        .map((mapping) => mapping.ledgerAccount)
+        .filter((account) => preflight.ledgerAccounts.some((ledgerAccount) => ledgerAccount.account === account)),
+    );
+    if (registeredAccounts.size === 1) {
+      mappings[statement.fileId] = [...registeredAccounts][0]!;
+      continue;
+    }
+    const compatibleAccounts = preflight.ledgerAccounts.filter((ledgerAccount) =>
+      bankAccountsMatch(ledgerAccount, statement),
+    );
+    if (compatibleAccounts.length === 1) mappings[statement.fileId] = compatibleAccounts[0]!.account;
+  }
+  return mappings;
+}
+
+export function confirmedIdentityMappings(
+  preflight: PreflightResult,
+  statementMappings: Record<string, string>,
+  linkedPhysicalStatementIds: Record<string, boolean> = {},
+): boolean {
+  const eligibleStatements = preflight.statements.filter((item) => item.reconciliationEligible);
+  return eligibleStatements.length > 0 && eligibleStatements.every((statement) => {
+    const ledgerAccountCode = statementMappings[statement.fileId];
+    const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === ledgerAccountCode);
+    const identity = ledgerAccount && compareBankAccountIdentities(ledgerAccount, statement);
+    return Boolean(identity && (identity.status !== "CONFLICT" || (
+      linkedPhysicalStatementIds[statement.fileId] && statement.bank && statement.agency && statement.account
+    )));
+  });
+}
+
+function partialIdentityMappings(
+  preflight: PreflightResult,
+  statementMappings: Record<string, string>,
+): boolean {
+  return preflight.statements.filter((item) => item.reconciliationEligible).some((statement) => {
+    const ledgerAccountCode = statementMappings[statement.fileId];
+    const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === ledgerAccountCode);
+    return Boolean(ledgerAccount && compareBankAccountIdentities(ledgerAccount, statement).status === "PARTIAL");
+  });
 }
 
 async function uploadFile(

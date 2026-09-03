@@ -109,7 +109,7 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       expect(matched.ledger?.id).toBe(ldgRecord.id);
     });
 
-    it("reconciles the pair as AUTO_MATCH_DATE_TOLERANCE (RF-03) within date window", () => {
+    it("reconciles a unique-value pair when accounting and bank dates differ", () => {
       const ldgDifferentDate: LedgerRecord = {
         ...ldgRecord,
         date: "2025-12-29",
@@ -117,8 +117,9 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       const result = reconcile([ldgDifferentDate], [stmtRecord], confirmation);
       expect(result.results.length).toBe(1);
       const matched = result.results[0]!;
-      expect(matched.status).toBe("AUTO_MATCH_DATE_TOLERANCE");
-      expect(matched.rule).toBe("RF-03");
+      expect(matched.status).toBe("AUTO_MATCH_UNIQUE_VALUE");
+      expect(matched.rule).toBe("RF-02");
+      expect(matched.reason).toBe("O valor em centavos é único no escopo e competência confirmados.");
     });
   });
 
@@ -139,7 +140,7 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       idempotencyKey: "test-negative-key",
     };
 
-    it("does NOT match when dates are outside tolerance (e.g. 5 days difference in RF-03)", () => {
+    it("does not reject a unique-value pair only because its dates differ", () => {
       const stmt: StatementRecord = {
         id: "s-out-date",
         sourceId: "s-out-date",
@@ -166,9 +167,13 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       };
 
       const result = reconcile([ldg], [stmt], confirmation);
-      expect(result.results.length).toBe(2);
-      expect(result.results.some((r) => r.status === "STATEMENT_WITHOUT_LEDGER")).toBe(true);
-      expect(result.results.some((r) => r.status === "LEDGER_WITHOUT_STATEMENT")).toBe(true);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0]).toMatchObject({
+        status: "AUTO_MATCH_UNIQUE_VALUE",
+        rule: "RF-02",
+        statement: { id: "s-out-date" },
+        ledger: { id: "l-out-date" },
+      });
     });
 
     it("does NOT match when amounts diverge", () => {

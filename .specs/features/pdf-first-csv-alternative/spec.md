@@ -46,6 +46,83 @@ A conciliação automática permanece um-para-um por valor exato, respeitando id
 
 Um banco é suportado apenas para cada combinação efetivamente testada de formato, tipo, família e versão. Resultados esperados do corpus privado só podem vir de manifesto/oráculo contábil revisado.
 
+## Adendo de confiabilidade — aprovado em 3 de setembro de 2026
+
+Este adendo não inicia uma segunda reimplementação. Ele encerra lacunas do motor
+existente e corrige divergências entre código, testes, matrizes e homologação
+contábil. Os estados abaixo nunca são sinônimos:
+
+- `IMPLEMENTED`: há código e teste local para a capacidade;
+- `TECHNICALLY_VALIDATED`: os gates técnicos aplicáveis passam;
+- `ACCOUNTING_HOMOLOGATED`: há oráculo privado revisado e aprovação contábil;
+- `EXTERNALLY_BLOCKED`: falta apenas insumo, credencial ou aprovação externa;
+- `NOT_SUPPORTED`: não há adapter ou a fonte não atende os controles exigidos.
+
+### `PDFCSV-011` — Contrato de matching por valor e evidência
+
+- Uma transação de extrato e uma do razão no mesmo escopo lógico, moeda e
+  competência podem ser conciliadas automaticamente quando o valor em centavos
+  for único nos dois lados. A data é evidência e não bloqueia essa regra.
+- Quando o valor se repetir, um documento normalizado, presente e único nos dois
+  lados pode desempatar a correspondência. Descrição isolada nunca desempata.
+- Quando ainda houver mais de um candidato possível, o motor deve produzir uma
+  ambiguidade revisável. Ele nunca escolhe por ordem de arquivo, linha ou data.
+- A regra e o rótulo exibidos devem descrever exatamente o critério aplicado.
+
+### `PDFCSV-012` — Escopo lógico e contas físicas
+
+- Uma conta contábil pode receber movimentos de várias contas bancárias físicas
+  quando o vínculo tiver sido confirmado para a mesma empresa, filial e
+  competência.
+- A identidade bancária define o escopo permitido do arquivo. Depois da
+  confirmação, ela não pontua nem exclui candidatos daquele escopo lógico.
+- O cadastro persistente deve reaplicar vínculos aprovados em novas execuções;
+  conflito explícito de banco, agência ou conta continua bloqueando o processo.
+
+### `PDFCSV-013` — Revisão de ambiguidades e agrupamentos
+
+- O resultado deve representar uma ambiguidade como grupo, com todos os
+  candidatos, evidências e razão de não decisão.
+- Sugestões 1:N e N:1 devem permitir aprovação ou rejeição auditável por pessoa
+  autorizada. Até a aprovação, não compõem saldos, totais ou cobertura
+  confirmada.
+
+### `PDFCSV-014` — Evidências e indicadores auditáveis
+
+- A interface e o XLSX devem distinguir resultados confirmados, sugeridos,
+  ambíguos e pendentes, tanto por linhas quanto por valor.
+- Cada item deve preservar arquivo, linha ou página, parser, método de extração
+  e controles de integridade.
+- O produto deve definir explicitamente se a evidência é apenas metadado ou
+  visualização temporária do documento. A opção escolhida deve respeitar a
+  política de retenção dos arquivos.
+
+### `PDFCSV-015` — Corpus, formatos e oráculos
+
+- O inventário deve cobrir todos os formatos presentes no corpus privado, não
+  somente PDF. Cada XLSX deve ser classificado como razão, fonte transacional ou
+  evidência antes de entrar na matriz de disponibilidade.
+- Para cada família, o oráculo de parsing deve validar identidade, período,
+  contagem, sinais, totais e saldo. O oráculo de conciliação deve validar pares
+  esperados, falsos positivos e pendências. Um não substitui o outro.
+
+### `PDFCSV-016` — Gate de confiabilidade e entrega
+
+- Uma alteração não pode avançar se os testes unitários, de integração ou de
+  interface em seu escopo estiverem falhando.
+- O CI de release deve executar paridade privada obrigatória, cobertura e
+  mutation testing. Teste de release ignorado não é resultado verde.
+- Nenhuma família recebe `ACCOUNTING_HOMOLOGATED` enquanto houver erro de
+  integridade, OCR necessário sem ambiente homologado, oráculo ausente ou falso
+  positivo conhecido.
+
+### `PDFCSV-017` — IA somente assistiva
+
+- A IA será avaliada apenas depois do gate determinístico do core. Ela recebe
+  candidatos ambíguos e retorna uma sugestão estruturada para revisão humana.
+- A IA e o n8n não são dependências do matching, não podem alterar totais sem
+  aprovação e não bloqueiam a execução determinística quando indisponíveis.
+
 ## Lotes
 
 - Lote 0: inventário completo dos 68 PDFs e disponibilidade de fontes estruturadas.
@@ -84,4 +161,3 @@ Exige todas as famílias obrigatórias do corpus PDF homologadas ou formalmente 
 - `CONCLUÍDO`: gate global integral aprovado.
 - `BLOQUEADO_EXTERNAMENTE`: restam apenas amostras, credenciais ou oráculos externos, enumerados de forma precisa.
 - `FALHA_TÉCNICA`: existe defeito interno sem alternativa segura; deve ser registrado com reprodução.
-

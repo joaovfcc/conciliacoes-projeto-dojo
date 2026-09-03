@@ -44,8 +44,9 @@ function contentScore(rows: ExtractedTabularRow[], headerIndex: number): { score
   return { score: Math.round(ratios.reduce((total, ratio) => total + ratio, 0) * 10), warnings };
 }
 
-function detectProfile(sheet: ExtractedTabularSheet, profile: StatementLayoutProfile): LayoutMatch | null {
+function detectProfile(sheet: ExtractedTabularSheet, profile: StatementLayoutProfile, fileName?: string): LayoutMatch | null {
   if (profile.detection.negativeSheetNames?.some((name) => normalizeHeader(sheet.name) === normalizeHeader(name))) return null;
+  if (!matchesInstitutionEvidence(sheet, profile, fileName)) return null;
   let best: LayoutMatch | null = null;
   for (let index = 0; index < Math.min(sheet.rows.length, profile.rules.headerScanRows || 50); index += 1) {
     const cells = sheet.rows[index]!.cells.map((cell) => cell.displayValue).filter(Boolean);
@@ -59,10 +60,14 @@ function detectProfile(sheet: ExtractedTabularSheet, profile: StatementLayoutPro
       if (found) { matchedHeaders.push(found.alias); if (found.exact) exact += 1; } else missing.push(group);
     }
     if (missing.length > 0) continue;
+    const distinctiveHeaders = (profile.detection.distinctiveHeaderGroups ?? []).filter((group) =>
+      group.some((alias) => cells.some((cell) => headerMatch(cell, alias).matched)),
+    );
     const content = contentScore(sheet.rows, index);
     const sheetBonus = profile.detection.sheetNameAliases?.some((name) => normalizeHeader(sheet.name) === normalizeHeader(name)) ? 20 : 0;
     const bankSpecificBonus = profile.bankCode ? 15 : 0;
-    const score = matchedHeaders.length * 20 + exact * 5 + sheetBonus + bankSpecificBonus + content.score;
+    const distinctiveHeaderBonus = distinctiveHeaders.length * 25;
+    const score = matchedHeaders.length * 20 + exact * 5 + sheetBonus + bankSpecificBonus + distinctiveHeaderBonus + content.score;
     const requiresReview = content.warnings.length > 0 || score < profile.detection.minimumScore;
     const candidate: LayoutMatch = {
       profileId: profile.id, score, confidence: score >= 100 && !requiresReview ? "HIGH" : score >= 70 ? "MEDIUM" : "LOW",
@@ -73,9 +78,14 @@ function detectProfile(sheet: ExtractedTabularSheet, profile: StatementLayoutPro
   return best;
 }
 
-export function detectLayoutResult(sheet: ExtractedTabularSheet, profiles: StatementLayoutProfile[], sourceFormat: TabularSourceFormat): LayoutDetectionResult {
+export function detectLayoutResult(
+  sheet: ExtractedTabularSheet,
+  profiles: StatementLayoutProfile[],
+  sourceFormat: TabularSourceFormat,
+  fileName?: string,
+): LayoutDetectionResult {
   const candidates = profiles.filter((profile) => profile.formats.includes(sourceFormat) && profile.status !== "DEPRECATED")
-    .map((profile) => detectProfile(sheet, profile)).filter((match): match is LayoutMatch => match !== null)
+    .map((profile) => detectProfile(sheet, profile, fileName)).filter((match): match is LayoutMatch => match !== null)
     .sort((left, right) => right.score - left.score || left.profileId.localeCompare(right.profileId));
   const best = candidates[0] ?? null;
   if (!best) return { match: null, candidates: [], warnings: ["LAYOUT_NOT_DETECTED"], requiresReview: true };
@@ -109,7 +119,29 @@ export function detectLayoutResult(sheet: ExtractedTabularSheet, profiles: State
   return { match: best, candidates, warnings: best.warnings, requiresReview: best.requiresReview };
 }
 
-export function detectLayout(sheet: ExtractedTabularSheet, profiles: StatementLayoutProfile[], sourceFormat: TabularSourceFormat): LayoutMatch | null {
-  const result = detectLayoutResult(sheet, profiles, sourceFormat);
+export function detectLayout(
+  sheet: ExtractedTabularSheet,
+  profiles: StatementLayoutProfile[],
+  sourceFormat: TabularSourceFormat,
+  fileName?: string,
+): LayoutMatch | null {
+  const result = detectLayoutResult(sheet, profiles, sourceFormat, fileName);
   return result.requiresReview ? null : result.match;
+}
+
+function matchesInstitutionEvidence(
+  sheet: ExtractedTabularSheet,
+  profile: StatementLayoutProfile,
+  fileName: string | undefined,
+): boolean {
+  const patterns = profile.detection.institutionPatterns;
+  if (!profile.bankCode || !patterns?.length) return true;
+  const identityText = normalizeHeader([
+    fileName ?? "",
+    sheet.name,
+    ...sheet.rows.slice(0, profile.rules.headerScanRows || 50).flatMap((row) =>
+      row.cells.map((cell) => cell.displayValue),
+    ),
+  ].join(" "));
+  return patterns.some((pattern) => identityText.includes(normalizeHeader(pattern)));
 }

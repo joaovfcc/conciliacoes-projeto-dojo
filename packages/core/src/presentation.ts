@@ -17,12 +17,14 @@ import type {
 
 const resultStatusLabels: Record<ResultStatus, string> = {
   AUTO_MATCH_EXACT: "Conciliação exata",
+  AUTO_MATCH_UNIQUE_VALUE: "Conciliação por valor único",
   AUTO_MATCH_DATE_TOLERANCE: "Conciliação com tolerância de data",
   AUTO_MATCH_VALUE_DATE: "Conciliação por valor e data",
   AUTO_MATCH_GROUP: "Conciliação em grupo",
   AUTO_MATCH_DAILY_TOTAL: "Conciliação por total diário",
   BANK_NET_ZERO: "Compensado no extrato",
   AUTO_APPLICATION_EXCLUDED: "Excluído - aplicação automática",
+  GROUP_SUGGESTION: "Sugestão de agrupamento",
   VALUE_ONLY_SUGGESTION: "Sugestão por valor",
   VALUE_DIVERGENCE: "Divergência de valor",
   DATE_DIVERGENCE: "Divergência de data",
@@ -34,7 +36,6 @@ const resultStatusLabels: Record<ResultStatus, string> = {
 
 const additionalMatchStatusLabels: Record<Exclude<MatchStatus, ResultStatus>, string> = {
   AUTO_MATCH_DESCRIPTION: "Conciliação por descrição",
-  GROUP_SUGGESTION: "Sugestão de agrupamento",
 };
 
 const reconciliationRuleLabels: Record<MatchRule, string> & Record<string, string> = {
@@ -53,7 +54,7 @@ const reconciliationRuleLabels: Record<MatchRule, string> & Record<string, strin
   RULE_8_BANK_NET_ZERO: "Regra 8 — movimentos opostos no mesmo dia, sem efeito líquido",
   RULE_1_AUTO_APPLICATION: "Regra 1 — segregação de aplicação automática",
   "RF-01": "RF-01 — segregação de aplicação automática",
-  "RF-02": "RF-02 — data e valor exatos",
+  "RF-02": "RF-02 — valor único no escopo confirmado",
   "RF-03": "RF-03 — proximidade de até três dias",
   "RF-04": "RF-04 — um movimento bancário para múltiplos lançamentos contábeis",
   "RF-05": "RF-05 — múltiplos movimentos bancários para um lançamento contábil",

@@ -16,7 +16,7 @@ import {
   reconciliationRuleLabel,
   resultStatusLabel,
 } from "./presentation.js";
-import type { ProcessingResult, ReconciliationResult } from "./types.js";
+import type { LedgerRecord, ProcessingResult, ReconciliationResult, StatementRecord } from "./types.js";
 
 const monetaryHeaders = new Set([
   "Saldo razão", "Saldo extrato", "Diferença", "Valor conciliado", "Valor razão", "Valor extrato",
@@ -47,12 +47,13 @@ export async function generateXlsx(result: ProcessingResult): Promise<Buffer> {
   writeSheet(workbook.addWorksheet("Resumo"), ["Empresa", "Filial", "Competência", "Conta contábil", "Contas bancárias", "Saldo razão", "Saldo extrato", "Diferença", "Qtd. conciliada", "Valor conciliado", "Divergências", "Sem extrato", "Sem razão", "Ambiguidades", "Duplicidades", "Status"], summaries.map((item) => [result.company, result.branch, formatPeriodForDisplay(result.period), item.ledgerAccount, item.statementAccounts.join(", "), item.ledgerBalance, item.statementBalance, item.balanceDifference, item.reconciledCount, item.reconciledValue, item.divergenceCount, item.ledgerWithoutStatementCount, item.statementWithoutLedgerCount, item.ambiguityCount, item.duplicateCount, accountSummaryStatusLabel(item.status)]));
   writeControls(workbook, result);
   writeSheet(workbook.addWorksheet("Controles de integridade"), ["Nível", "Categoria", "Descrição", "Arquivo", "Posição", "Orientação"], issues.map(issueRow));
-  writeResultSheet(workbook, "Conciliações exatas", results.filter((item) => item.status === "AUTO_MATCH_EXACT"));
+  writeResultSheet(workbook, "Conciliações automáticas", results.filter((item) => item.status === "AUTO_MATCH_EXACT" || item.status === "AUTO_MATCH_UNIQUE_VALUE"));
   writeResultSheet(workbook, "Conciliações proximidade", results.filter((item) => item.status === "AUTO_MATCH_DATE_TOLERANCE"));
   writeResultSheet(workbook, "Conciliações em grupo", results.filter((item) => item.status === "AUTO_MATCH_GROUP"));
   writeResultSheet(workbook, "Totais diários", results.filter((item) => item.status === "AUTO_MATCH_DAILY_TOTAL"));
   writeResultSheet(workbook, "Compensados no extrato", results.filter((item) => item.status === "BANK_NET_ZERO"));
   writeResultSheet(workbook, "Aplicações automáticas", results.filter((item) => item.status === "AUTO_APPLICATION_EXCLUDED"));
+  writeResultSheet(workbook, "Sugestões de agrupamento", results.filter((item) => item.status === "GROUP_SUGGESTION"));
   writeResultSheet(workbook, "Sugestões", results.filter((item) => item.status === "VALUE_ONLY_SUGGESTION"));
   writeResultSheet(workbook, "Divergências", results.filter((item) => item.status === "VALUE_DIVERGENCE" || item.status === "DATE_DIVERGENCE"));
   writeResultSheet(workbook, "Razão sem extrato", results.filter((item) => item.status === "LEDGER_WITHOUT_STATEMENT"));
@@ -76,7 +77,7 @@ function writeControls(workbook: ExcelJS.Workbook, result: ProcessingResult): vo
   const controls = result.controls;
   if (!controls) return;
   writeSheet(workbook.addWorksheet("Controles consolidados"), ["Controle", "Valor banco", "Valor razão", "Diferença", "Tolerância", "Status"], [
-    ["Movimentos", controls.movements.bankConciliable, controls.movements.ledger, controls.movements.difference, controls.tolerance, balanceStatusLabel(controls.movements.status)],
+    ["Movimentações líquidas", controls.movements.bankConciliable, controls.movements.ledger, controls.movements.difference, controls.tolerance, balanceStatusLabel(controls.movements.status)],
     ["Saldo inicial", controls.balances.bankOpening ?? "", controls.balances.ledgerOpening ?? "", controls.balances.openingDifference ?? "", controls.tolerance, balanceStatusLabel(controls.balances.openingStatus)],
     ["Saldo final", controls.balances.bankClosing ?? "", controls.balances.ledgerClosing ?? "", controls.balances.closingDifference ?? "", controls.tolerance, balanceStatusLabel(controls.balances.closingStatus)],
   ]);
@@ -146,6 +147,30 @@ function writeControls(workbook: ExcelJS.Workbook, result: ProcessingResult): vo
       stmtTot?.absoluteValue.percentage ? `${stmtTot.absoluteValue.percentage}%` : "",
       stmtTot?.lines.formula ?? "linhas do extrato conciliadas / total de movimentos transacionais do extrato",
     ],
+    ...(cov.suggested?.overallOperational ? [[
+      "Cobertura sugerida para revisão",
+      cov.suggested.overallOperational.lines.covered,
+      cov.suggested.overallOperational.lines.total,
+      cov.suggested.overallOperational.lines.pending ?? "",
+      `${cov.suggested.overallOperational.lines.percentage}%`,
+      cov.suggested.overallOperational.absoluteValue.covered,
+      cov.suggested.overallOperational.absoluteValue.total,
+      cov.suggested.overallOperational.absoluteValue.pending ?? "",
+      `${cov.suggested.overallOperational.absoluteValue.percentage}%`,
+      cov.suggested.overallOperational.lines.formula ?? "linhas reservadas por sugestões / linhas elegíveis",
+    ]] : []),
+    ...(cov.potential?.overallOperational ? [[
+      "Cobertura potencial (confirmada + sugerida)",
+      cov.potential.overallOperational.lines.covered,
+      cov.potential.overallOperational.lines.total,
+      cov.potential.overallOperational.lines.pending ?? "",
+      `${cov.potential.overallOperational.lines.percentage}%`,
+      cov.potential.overallOperational.absoluteValue.covered,
+      cov.potential.overallOperational.absoluteValue.total,
+      cov.potential.overallOperational.absoluteValue.pending ?? "",
+      `${cov.potential.overallOperational.absoluteValue.percentage}%`,
+      cov.potential.overallOperational.lines.formula ?? "linhas confirmadas ou sugeridas / linhas elegíveis",
+    ]] : []),
     ...safeArray<{ status: ReconciliationResult["status"]; count: string }>(controls.countsByStatus).map((item) => [
       resultStatusLabel(item.status),
       item.count,
@@ -168,25 +193,34 @@ function issueRow(item: ProcessingResult["issues"][number]): unknown[] {
 
 function writeAmbiguitySheet(workbook: ExcelJS.Workbook, results: ReconciliationResult[]): void {
   const headers = ["ID da ambiguidade", "Conta contábil", "Data razão", "Documento razão", "Valor razão", "ID candidato", "Banco", "Agência", "Conta bancária", "Data candidato", "Documento candidato", "Histórico candidato", "Valor candidato", "Arquivo", "Página/Linha", "Regra", "Motivo"];
-  const rows = results.flatMap((item) => safeArray<{ id: string; bank: string; agency: string; bankAccount: string; date: string; document: string; history: string; value: string; evidence: { originalName: string; page?: number; line?: number } }>(item.candidates).map((candidate) => [
-    item.id,
-    item.ledger?.ledgerAccount ?? "",
-    formatDateForDisplay(item.ledger?.date),
-    item.ledger?.document ?? "",
-    item.ledger?.value ?? "",
-    candidate.id,
-    bankLabel(candidate.bank),
-    candidate.agency,
-    candidate.bankAccount,
-    formatDateForDisplay(candidate.date),
-    candidate.document,
-    candidate.history,
-    candidate.value,
-    candidate.evidence.originalName,
-    candidate.evidence.page ?? candidate.evidence.line ?? "",
-    reconciliationRuleLabel(item.rule),
-    item.reason,
-  ]));
+  const uniqueGroups = [...new Map(results.map((item) => [item.ambiguityGroup?.id ?? item.id, item])).values()];
+  const rows = uniqueGroups.flatMap((item) => {
+    const ledgers: LedgerRecord[] = item.ambiguityGroup
+      ? safeArray<LedgerRecord>(item.ledgers)
+      : safeArray<LedgerRecord>(item.ledger ? [item.ledger] : []);
+    const candidates: StatementRecord[] = item.ambiguityGroup
+      ? safeArray<StatementRecord>(item.statements)
+      : safeArray<StatementRecord>(item.candidates?.length ? item.candidates : item.statement ? [item.statement] : []);
+    return ledgers.flatMap((ledger) => candidates.map((candidate) => [
+      item.ambiguityGroup?.id ?? item.id,
+      ledger.ledgerAccount,
+      formatDateForDisplay(ledger.date),
+      ledger.document,
+      ledger.value,
+      candidate.id,
+      bankLabel(candidate.bank),
+      candidate.agency,
+      candidate.bankAccount,
+      formatDateForDisplay(candidate.date),
+      candidate.document,
+      candidate.history,
+      candidate.value,
+      candidate.evidence.originalName,
+      candidate.evidence.page ?? candidate.evidence.line ?? "",
+      reconciliationRuleLabel(item.rule),
+      item.reason,
+    ]));
+  });
   writeSheet(workbook.addWorksheet("Ambiguidades"), headers, rows);
 }
 
@@ -197,7 +231,11 @@ function writeResultSheet(workbook: ExcelJS.Workbook, name: string, results: Rec
 function resultRows(item: ReconciliationResult): unknown[][] {
   const ledgers = Array.isArray(item.ledgers) ? item.ledgers : (item.ledger ? [item.ledger] : []);
   const statements = Array.isArray(item.statements) ? item.statements : (item.statement ? [item.statement] : []);
-  const disclaimer = item.status === "AUTO_MATCH_DAILY_TOTAL" ? "Fechamento no nível do lote diário; não implica pareamento individual entre linhas." : "";
+  const disclaimer = item.status === "AUTO_MATCH_DAILY_TOTAL"
+    ? "Fechamento no nível do lote diário; não implica pareamento individual entre linhas."
+    : item.status === "GROUP_SUGGESTION"
+      ? "Sugestão para revisão manual; não integra os totais conciliados automaticamente."
+      : "";
   const common = [item.id, resultStatusLabel(item.status), decisionLevelLabel(item.decisionLevel), reconciliationRuleLabel(item.rule), item.reason, disclaimer];
   const totals = [item.matchGroup ? centsCell(item.matchGroup.bankTotalCents) : "", item.matchGroup ? centsCell(item.matchGroup.ledgerTotalCents) : "", item.matchGroup?.differenceCents ?? "", item.ruleVersion ?? ""];
   const ledgerRows = ledgers.map((record) => [...common, "Razão", record.id, record.ledgerAccount, "", "", "", formatDateForDisplay(record.date), record.document, record.history, record.value, record.evidence.originalName, record.evidence.line ?? "", parserLabel(record.evidence.parser), extractionMethodLabel(record.evidence.extractionMethod), record.evidence.confidence ?? "", ...totals]);
@@ -211,7 +249,7 @@ function writeAudit(workbook: ExcelJS.Workbook, result: ProcessingResult): void 
 
 function auditOutcomeLabel(status: string): string {
   const labels: Record<string, string> = {
-    RECONCILED_EXACT: resultStatusLabel("AUTO_MATCH_EXACT"), RECONCILED_DATE_WINDOW: resultStatusLabel("AUTO_MATCH_DATE_TOLERANCE"),
+    RECONCILED_EXACT: resultStatusLabel("AUTO_MATCH_EXACT"), RECONCILED_UNIQUE_VALUE: resultStatusLabel("AUTO_MATCH_UNIQUE_VALUE"), RECONCILED_DATE_WINDOW: resultStatusLabel("AUTO_MATCH_DATE_TOLERANCE"),
     RECONCILED_GROUP: resultStatusLabel("AUTO_MATCH_GROUP"), RECONCILED_DAILY_TOTAL: resultStatusLabel("AUTO_MATCH_DAILY_TOTAL"),
     BANK_NET_ZERO: resultStatusLabel("BANK_NET_ZERO"), EXCLUDED_AUTO_APPLICATION: resultStatusLabel("AUTO_APPLICATION_EXCLUDED"),
     BANK_ONLY: resultStatusLabel("STATEMENT_WITHOUT_LEDGER"), LEDGER_ONLY: resultStatusLabel("LEDGER_WITHOUT_STATEMENT"),

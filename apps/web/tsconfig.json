@@ -8,7 +8,9 @@
     "plugins": [{ "name": "next" }],
     "paths": {
       "@/*": ["./src/*"],
-      "@conciliacao/core/presentation": ["../../packages/core/src/presentation.ts"]
+      "@conciliacao/core/presentation": ["../../packages/core/src/presentation.ts"],
+      "@conciliacao/core/normalization": ["../../packages/core/src/normalization.ts"],
+      "@conciliacao/core/bank-directory": ["../../packages/core/src/bank-directory.ts"]
     },
     "types": ["node", "vitest/globals"]
   },

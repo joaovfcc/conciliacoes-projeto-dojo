@@ -27,6 +27,14 @@ type LedgerAccountItem = {
   createdAt: string;
 };
 
+type AccountMappingItem = {
+  id: string;
+  companyId: string;
+  status: string;
+  bankAccount: BankAccountItem;
+  ledgerAccount: LedgerAccountItem;
+};
+
 type LinkedAccountRow = {
   id: string;
   ledgerId?: string | undefined;
@@ -60,6 +68,7 @@ export function CompaniesAccountsPanel({
   const [activeTab, setActiveTab] = useState<"ACCOUNTS" | "COMPANIES">("ACCOUNTS");
   const [bankAccounts, setBankAccounts] = useState<BankAccountItem[]>([]);
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccountItem[]>([]);
+  const [accountMappings, setAccountMappings] = useState<AccountMappingItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -82,7 +91,7 @@ export function CompaniesAccountsPanel({
   // Modal: Exclusão
   const [isDeleteCompanyOpen, setIsDeleteCompanyOpen] = useState(false);
   const [companyToDelete, setCompanyToDelete] = useState<AuthorizedCompany | null>(null);
-  const [accountToDelete, setAccountToDelete] = useState<{ id: string; type: "BANK" | "LEDGER"; name: string } | null>(
+  const [accountToDelete, setAccountToDelete] = useState<{ id: string; type: "BANK" | "LEDGER" | "MAPPING"; name: string } | null>(
     null,
   );
 
@@ -103,9 +112,11 @@ export function CompaniesAccountsPanel({
       const data = (await res.json()) as {
         bankAccounts: BankAccountItem[];
         ledgerAccounts: LedgerAccountItem[];
+        mappings: AccountMappingItem[];
       };
       setBankAccounts(data.bankAccounts ?? []);
       setLedgerAccounts(data.ledgerAccounts ?? []);
+      setAccountMappings(data.mappings ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao consultar contas");
     } finally {
@@ -246,28 +257,25 @@ export function CompaniesAccountsPanel({
     { code: "000", name: "Outro Banco" },
   ];
 
-  // Construir tabela de contas vinculadas consolidada
-  const linkedRows: LinkedAccountRow[] = [];
-  const maxRows = Math.max(ledgerAccounts.length, bankAccounts.length);
-
-  for (let i = 0; i < maxRows; i++) {
-    const l = ledgerAccounts[i];
-    const b = bankAccounts[i];
-    linkedRows.push({
-      id: l?.id || b?.id || String(i),
-      ledgerId: l?.id,
-      bankId: b?.id,
-      ledgerCode: l?.code || "—",
-      description: l?.description || "—",
-      bankName: b?.bankName || (b?.bankCode ? `Banco ${b.bankCode}` : "—"),
-      agency: b?.agency || "—",
-      accountNumber: b?.accountNumber ? `${b.accountNumber}${b.accountDigit ? `-${b.accountDigit}` : ""}` : "—",
-      type: b?.accountType === "CHECKING" ? "Conta Corrente" : b?.accountType || "Ativo",
+  // Cada linha vem da relação persistida, e não da posição das listas de contas.
+  const linkedRows: LinkedAccountRow[] = accountMappings.map((mapping) => {
+    const l = mapping.ledgerAccount;
+    const b = mapping.bankAccount;
+    return {
+      id: mapping.id,
+      ledgerId: l.id,
+      bankId: b.id,
+      ledgerCode: l.code,
+      description: l.description,
+      bankName: b.bankName || (b.bankCode ? `Banco ${b.bankCode}` : "—"),
+      agency: b.agency || "—",
+      accountNumber: b.accountNumber ? `${b.accountNumber}${b.accountDigit ? `-${b.accountDigit}` : ""}` : "—",
+      type: b.accountType === "CHECKING" ? "Conta Corrente" : b.accountType || "Ativo",
       statementFormat: "Automático (OFX/XLSX/PDF)",
       tolerance: "R$ 0,01 / 2 dias",
-      status: l?.status === "ACTIVE" || b?.status === "ACTIVE" ? "Ativa" : "Ativa",
-    });
-  }
+      status: mapping.status === "ACTIVE" ? "Ativa" : "Inativa",
+    };
+  });
 
   return (
     <div>
@@ -345,7 +353,7 @@ export function CompaniesAccountsPanel({
             </label>
 
             <span className="table-counter">
-              {ledgerAccounts.length} contas contábeis · {bankAccounts.length} contas bancárias
+              {ledgerAccounts.length} contas contábeis · {bankAccounts.length} contas bancárias · {accountMappings.length} vínculos
             </span>
           </div>
 
@@ -402,11 +410,7 @@ export function CompaniesAccountsPanel({
                           className="button danger btn-sm"
                           title="Remover conta"
                           onClick={() => {
-                            if (row.ledgerId) {
-                              setAccountToDelete({ id: row.ledgerId, type: "LEDGER", name: row.ledgerCode });
-                            } else if (row.bankId) {
-                              setAccountToDelete({ id: row.bankId, type: "BANK", name: `${row.bankName} ${row.accountNumber}` });
-                            }
+                            setAccountToDelete({ id: row.id, type: "MAPPING", name: `${row.ledgerCode} · ${row.bankName} ${row.accountNumber}` });
                           }}
                         >
                           Excluir

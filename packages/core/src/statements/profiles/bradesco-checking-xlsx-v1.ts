@@ -10,11 +10,13 @@ export const BRADESCO_CHECKING_XLSX_V1: StatementLayoutProfile = {
 
   detection: {
     sheetNameAliases: ["bradesco"],
+    institutionPatterns: ["bradesco"],
     requiredHeaderGroups: [
       ["data", "dt. lançamento", "data lançamento", "dt balancete", "data balancete"],
       ["histórico", "descrição", "lançamento"],
       ["débito", "crédito", "valor"],
     ],
+    distinctiveHeaderGroups: [["ag/origem"], ["razão social"], ["cpf/cnpj"]],
     minimumScore: 60,
   },
 

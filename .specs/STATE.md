@@ -19,6 +19,7 @@ Atualizado em: 2026-08-10
 - `AD-013` — A aplicação exige login. O tenant é `ConfigOrganization`; papéis operacionais são concedidos por `ConfigLegalEntity`; `OWNER` administra o tenant. Esta decisão substitui a compatibilidade anônima de `AD-011`.
 - `AD-014` — O browser mantém o access JWT apenas em memória. O refresh token opaco é rotativo, persistido somente por hash e enviado em cookie `HttpOnly`, `SameSite=Lax` e `Secure` em produção.
 - `AD-015` — Sessões autenticadas têm access JWT de 10 minutos, expiração por 8 horas de inatividade e limite absoluto de 24 horas. Resultados autenticados são retidos por um ano; arquivos de entrada continuam temporários.
+- `AD-016` — No escopo lógico confirmado, valor em centavos único na competência concilia automaticamente sem bloquear por data. Valor repetido só pode ser desempatado por documento normalizado e único; sem essa evidência, permanece ambíguo. Descrição isolada e ordem de origem nunca decidem um match.
 
 ## Baseline protegido
 
@@ -91,6 +92,16 @@ técnico do Lote 3 aguarda a suíte integral; depois, a próxima instituição �
 Ao retomar:
 
 1. consultar `features/pdf-first-csv-alternative/tasks.md`;
-2. executar a primeira tarefa não concluída;
-3. atualizar este arquivo e as matrizes de suporte ao fim de cada ciclo;
-4. nunca marcar um resultado contábil esperado sem oráculo privado revisado.
+2. `T70` foi concluída: valor único em competência e escopo lógico confirmado
+   não bloqueia por data; documento normalizado único desempata valor repetido;
+   447 testes do core, 67 testes unitários web e 17 componentes web passaram;
+3. `T71` foi concluída: `BankLedgerMapping` persiste relações N:1 entre contas
+   físicas e contas contábeis, a pré-análise reutiliza somente relações únicas
+   e a confirmação bloqueia vínculos persistentes divergentes ou ambíguos;
+4. `T72` foi concluída: itens ambíguos compartilham um grupo determinístico com
+   todos os candidatos de razão e extrato, motivo e evidência no XLSX; continuam
+   exclusivamente em revisão e fora dos totais automáticos;
+5. executar `T73`, iniciando por aprovação e rejeição auditável das sugestões
+   1:N e N:1, sem alterar totais antes da decisão;
+6. atualizar este arquivo e as matrizes de suporte ao fim de cada ciclo;
+7. nunca marcar um resultado contábil esperado sem oráculo privado revisado.

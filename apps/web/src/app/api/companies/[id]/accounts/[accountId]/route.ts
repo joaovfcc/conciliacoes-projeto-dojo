@@ -23,30 +23,37 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     }
 
     const { searchParams } = new URL(request.url);
-    const type = searchParams.get("type"); // "BANK" or "LEDGER"
+    const type = searchParams.get("type");
+
+    if (type === "MAPPING") {
+      const deleted = await prisma.bankLedgerMapping.deleteMany({ where: { id: accountId, companyId } });
+      if (deleted.count === 0) {
+        return NextResponse.json({ error: { code: "NOT_FOUND", message: "Vínculo de contas não encontrado" } }, { status: 404 });
+      }
+      return NextResponse.json({ success: true });
+    }
 
     if (type === "BANK") {
-      await prisma.bankAccount.delete({
-        where: { id: accountId },
-      });
+      const mappingCount = await prisma.bankLedgerMapping.count({ where: { companyId, bankAccountId: accountId } });
+      if (mappingCount > 0) {
+        return NextResponse.json({ error: { code: "ACCOUNT_MAPPING_EXISTS", message: "Remova primeiro os vínculos desta conta bancária." } }, { status: 409 });
+      }
+      const deleted = await prisma.bankAccount.deleteMany({ where: { id: accountId, companyId } });
+      if (deleted.count === 0) return NextResponse.json({ error: { code: "NOT_FOUND", message: "Conta bancária não encontrada" } }, { status: 404 });
       return NextResponse.json({ success: true });
     }
 
     if (type === "LEDGER") {
-      await prisma.ledgerAccount.delete({
-        where: { id: accountId },
-      });
+      const mappingCount = await prisma.bankLedgerMapping.count({ where: { companyId, ledgerAccountId: accountId } });
+      if (mappingCount > 0) {
+        return NextResponse.json({ error: { code: "ACCOUNT_MAPPING_EXISTS", message: "Remova primeiro os vínculos desta conta contábil." } }, { status: 409 });
+      }
+      const deleted = await prisma.ledgerAccount.deleteMany({ where: { id: accountId, companyId } });
+      if (deleted.count === 0) return NextResponse.json({ error: { code: "NOT_FOUND", message: "Conta contábil não encontrada" } }, { status: 404 });
       return NextResponse.json({ success: true });
     }
 
-    // Try deleting bank account or ledger account
-    try {
-      await prisma.bankAccount.delete({ where: { id: accountId } });
-      return NextResponse.json({ success: true });
-    } catch {
-      await prisma.ledgerAccount.delete({ where: { id: accountId } });
-      return NextResponse.json({ success: true });
-    }
+    return NextResponse.json({ error: { code: "INVALID_TYPE", message: "Tipo de conta inválido" } }, { status: 400 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro ao remover conta";
     return NextResponse.json({ error: { code: "INTERNAL_ERROR", message } }, { status: 500 });

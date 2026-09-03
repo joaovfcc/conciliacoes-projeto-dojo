@@ -18,6 +18,7 @@ import {
 import { normalizeDocumentId, dayDifference } from "./normalization.js";
 import type {
   AccountMapping,
+  AmbiguityGroup,
   ConfirmProcessingRequest,
   DecisionLevel,
   LedgerRecord,
@@ -34,6 +35,7 @@ const EPOCH = "1970-01-01T00:00:00.000Z";
 const CONTROL_TOLERANCE_CENTS = 5n;
 const automaticStatuses = new Set<ResultStatus>([
   "AUTO_MATCH_EXACT",
+  "AUTO_MATCH_UNIQUE_VALUE",
   "AUTO_MATCH_DATE_TOLERANCE",
   "AUTO_MATCH_GROUP",
   "AUTO_MATCH_DAILY_TOTAL",
@@ -42,6 +44,7 @@ const automaticStatuses = new Set<ResultStatus>([
 ]);
 const reconciledStatuses = new Set<ResultStatus>([
   "AUTO_MATCH_EXACT",
+  "AUTO_MATCH_UNIQUE_VALUE",
   "AUTO_MATCH_DATE_TOLERANCE",
   "AUTO_MATCH_GROUP",
   "AUTO_MATCH_DAILY_TOTAL",
@@ -50,6 +53,14 @@ const reconciledStatuses = new Set<ResultStatus>([
 type PartitionResult = {
   results: ReconciliationResult[];
   engine: ReconciliationEngineOutput;
+};
+
+type CoverageTransaction = {
+  id: string;
+  source: "BANK" | "LEDGER";
+  status: string;
+  amountCents: string;
+  postingDate: string;
 };
 
 export function reconcile(
@@ -86,6 +97,7 @@ export function reconcile(
   const evaluatedAt = confirmation.evaluatedAt ?? EPOCH;
   const controls = consolidatedControls(partitioned.engines, partitioned.results, confirmation, scopedLedgers, preflight);
   return {
+    resultSchemaVersion: "2.0",
     company: confirmation.company,
     branch: confirmation.branch ?? "",
     period: confirmation.period,
@@ -168,14 +180,221 @@ function reconcilePartition(
   ];
   const engine = new ReconciliationEngine(0, confirmation.dateToleranceDays, {
     evaluatedAt: confirmation.evaluatedAt ?? EPOCH,
+    // Agrupamentos nunca compõem os totais conciliados sem revisão humana.
+    // As sugestões determinísticas são calculadas abaixo, sobre o resíduo 1:1.
+    allowOneToMany: false,
+    allowManyToOne: false,
+    allowDailyTotal: false,
+    matchByUniqueValueWithinPeriod: true,
   }).run(transactions);
   const auditByGroup = new Map(engine.audit.filter((item) => item.transactionIds.length > 1).map((item) => [transactionSetKey(item.transactionIds), item]));
   const results = engine.matchGroups.map((group) => projectGroup(group, auditByGroup.get(transactionSetKey([...group.bankTransactionIds, ...group.ledgerTransactionIds])), ledgerById, statementById));
+  const suggestions = suggestDeterministicBatches(ledgers, statements, mapping.signProfile, engine, confirmation.evaluatedAt ?? EPOCH);
+  const suggestedTransactionIds = new Set(
+    suggestions.flatMap((group) => [...group.bankTransactionIds, ...group.ledgerTransactionIds]),
+  );
+  const ambiguities = ambiguousValueGroups(engine, ledgerById, statementById);
   for (const transaction of engine.transactions.filter((item) => !item.matchGroupId)) {
+    // Uma linha pertence a exatamente uma classificação visível. Quando ela
+    // integra uma sugestão revisável, não deve reaparecer como pendência avulsa.
+    if (suggestedTransactionIds.has(transaction.id)) continue;
     const audit = engine.audit.find((item) => item.transactionIds.length === 1 && item.transactionIds[0] === transaction.id);
-    results.push(projectSingle(transaction.status, transaction.id, audit, ledgerById, statementById));
+    results.push(ambiguities.has(transaction.id)
+      ? projectAmbiguousSingle(transaction.id, ambiguities.get(transaction.id)!, ledgerById, statementById)
+      : projectSingle(transaction.status, transaction.id, audit, ledgerById, statementById));
   }
+  results.push(...suggestions.map((group) => projectSuggestedGroup(group, ledgerById, statementById)));
   return { results, engine };
+}
+
+function ambiguousValueGroups(
+  engine: ReconciliationEngineOutput,
+  ledgerById: Map<string, LedgerRecord>,
+  statementById: Map<string, StatementRecord>,
+): Map<string, AmbiguityGroup> {
+  const buckets = new Map<string, typeof engine.transactions>();
+  for (const transaction of engine.transactions) {
+    if (transaction.status !== "BANK_ONLY" && transaction.status !== "LEDGER_ONLY") continue;
+    const key = [transaction.accountId, transaction.currency, transaction.amountCents].join("\u0000");
+    buckets.set(key, [...(buckets.get(key) ?? []), transaction]);
+  }
+  const groups = new Map<string, AmbiguityGroup>();
+  for (const [key, entries] of buckets.entries()) {
+    const banks = entries.filter((item) => item.source === "BANK");
+    const ledgers = entries.filter((item) => item.source === "LEDGER");
+    if (banks.length > 0 && ledgers.length > 0 && (banks.length !== 1 || ledgers.length !== 1)) {
+      const ledgerCandidateIds = ledgers.map((item) => item.id).sort();
+      const statementCandidateIds = banks.map((item) => item.id).sort();
+      const ledgerAccount = ledgerCandidateIds
+        .map((id) => ledgerById.get(id)?.ledgerAccount)
+        .find((account): account is string => Boolean(account)) ?? "";
+      const amount = centsToDecimal(banks[0]!.amountCents);
+      const group: AmbiguityGroup = {
+        id: deterministicId(["AMBIGUITY_GROUP", key, ...ledgerCandidateIds, ...statementCandidateIds]),
+        ledgerAccount,
+        amount,
+        ledgerCandidateIds,
+        statementCandidateIds,
+        reason: `Há ${ledgerCandidateIds.length} lançamento(s) no razão e ${statementCandidateIds.length} movimento(s) no extrato com o mesmo valor; nenhum documento normalizado identifica um único par.`,
+        evaluatedAt: engine.evaluatedAt,
+      };
+      for (const entry of entries) groups.set(entry.id, group);
+    }
+  }
+  return groups;
+}
+
+/**
+ * Finds only whole, deterministic batches. It deliberately does not search
+ * arbitrary subsets: a suggestion must be the complete same-date,
+ * same-direction and same-semantic-family residue. This makes the evidence
+ * reviewable and avoids turning a coincidental sum into a reconciliation.
+ */
+function suggestDeterministicBatches(
+  ledgers: LedgerRecord[],
+  statements: StatementRecord[],
+  signProfile: AccountMapping["signProfile"],
+  engine: ReconciliationEngineOutput,
+  evaluatedAt: string,
+): ReconciliationMatchGroup[] {
+  const statusById = new Map(engine.transactions.map((item) => [item.id, item.status]));
+  const pendingLedgers = ledgers.filter((item) => statusById.get(item.id) === "LEDGER_ONLY" && eligibleLedger(item));
+  const pendingStatements = statements.filter((item) => statusById.get(item.id) === "BANK_ONLY" && eligibleStatement(item));
+  const candidates: ReconciliationMatchGroup[] = [
+    ...oneToManyBatchCandidates(pendingStatements, pendingLedgers, signProfile, evaluatedAt),
+    ...manyToOneBatchCandidates(pendingStatements, pendingLedgers, signProfile, evaluatedAt),
+  ];
+  const references = new Map<string, number>();
+  for (const candidate of candidates) {
+    for (const id of [...candidate.bankTransactionIds, ...candidate.ledgerTransactionIds]) {
+      references.set(id, (references.get(id) ?? 0) + 1);
+    }
+  }
+  // A transaction shared by two plausible batches stays pending. We never
+  // choose one candidate arbitrarily, even as a suggestion.
+  return candidates
+    .filter((candidate) => [...candidate.bankTransactionIds, ...candidate.ledgerTransactionIds].every((id) => references.get(id) === 1))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function oneToManyBatchCandidates(
+  statements: StatementRecord[],
+  ledgers: LedgerRecord[],
+  signProfile: AccountMapping["signProfile"],
+  evaluatedAt: string,
+): ReconciliationMatchGroup[] {
+  const ledgerBatches = batches(ledgers, (record) => centsForLedger(record, signProfile));
+  const candidates: ReconciliationMatchGroup[] = [];
+  for (const statement of statements) {
+    const key = batchKey(statement, decimalToCents(statement.value));
+    const members = ledgerBatches.get(key) ?? [];
+    if (members.length < 2) continue;
+    const ledgerTotal = totalLedgerBatch(members, signProfile);
+    const bankTotal = decimalToCents(statement.value);
+    if (ledgerTotal !== bankTotal) continue;
+    candidates.push(suggestedGroup("RF-04", "one-to-many", [statement.id], members.map((item) => item.id), bankTotal, ledgerTotal, evaluatedAt));
+  }
+  return candidates;
+}
+
+function manyToOneBatchCandidates(
+  statements: StatementRecord[],
+  ledgers: LedgerRecord[],
+  signProfile: AccountMapping["signProfile"],
+  evaluatedAt: string,
+): ReconciliationMatchGroup[] {
+  const statementBatches = batches(statements, (record) => decimalToCents(record.value));
+  const candidates: ReconciliationMatchGroup[] = [];
+  for (const ledger of ledgers) {
+    const ledgerAmount = centsForLedger(ledger, signProfile);
+    const key = batchKey(ledger, ledgerAmount);
+    const members = statementBatches.get(key) ?? [];
+    if (members.length < 2) continue;
+    const bankTotal = members.reduce((sum, item) => sum + decimalToCents(item.value), 0n);
+    if (bankTotal !== ledgerAmount) continue;
+    candidates.push(suggestedGroup("RF-05", "many-to-one", members.map((item) => item.id), [ledger.id], bankTotal, ledgerAmount, evaluatedAt));
+  }
+  return candidates;
+}
+
+function batches<T extends LedgerRecord | StatementRecord>(
+  records: T[],
+  amount: (record: T) => bigint,
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const record of records) {
+    const key = batchKey(record, amount(record));
+    if (!semanticFamily(record.history)) continue;
+    const current = grouped.get(key) ?? [];
+    current.push(record);
+    grouped.set(key, current);
+  }
+  return grouped;
+}
+
+function batchKey(record: Pick<LedgerRecord, "date" | "history"> | Pick<StatementRecord, "date" | "history">, amount: bigint): string {
+  return [record.date, amount < 0n ? "NEGATIVE" : "POSITIVE", semanticFamily(record.history) ?? ""].join("\u0000");
+}
+
+function semanticFamily(history: string): string | undefined {
+  const categories = extractSemanticCategories(history);
+  return categories.length === 1 ? categories[0] : undefined;
+}
+
+function centsForLedger(record: LedgerRecord, signProfile: AccountMapping["signProfile"]): bigint {
+  return decimalToCents(record.value) * signConvention(signProfile).ledgerMovementMultiplier;
+}
+
+function totalLedgerBatch(records: LedgerRecord[], signProfile: AccountMapping["signProfile"]): bigint {
+  return records.reduce((sum, record) => sum + centsForLedger(record, signProfile), 0n);
+}
+
+function suggestedGroup(
+  ruleId: "RF-04" | "RF-05",
+  type: "one-to-many" | "many-to-one",
+  bankTransactionIds: string[],
+  ledgerTransactionIds: string[],
+  bankTotal: bigint,
+  ledgerTotal: bigint,
+  evaluatedAt: string,
+): ReconciliationMatchGroup {
+  return {
+    id: deterministicId(["GROUP_SUGGESTION", ruleId, ...[...bankTransactionIds].sort(), ...[...ledgerTransactionIds].sort()]),
+    ruleId,
+    ruleVersion: "1.0",
+    type,
+    bankTransactionIds: [...bankTransactionIds].sort(),
+    ledgerTransactionIds: [...ledgerTransactionIds].sort(),
+    bankTotalCents: bankTotal.toString(),
+    ledgerTotalCents: ledgerTotal.toString(),
+    differenceCents: (bankTotal - ledgerTotal).toString(),
+    status: "suggested",
+    evaluatedAt,
+  };
+}
+
+function projectSuggestedGroup(
+  group: ReconciliationMatchGroup,
+  ledgerById: Map<string, LedgerRecord>,
+  statementById: Map<string, StatementRecord>,
+): ReconciliationResult {
+  const ledgers = group.ledgerTransactionIds.map((id) => ledgerById.get(id)!).filter(Boolean);
+  const statements = group.bankTransactionIds.map((id) => statementById.get(id)!).filter(Boolean);
+  return {
+    id: group.id,
+    status: "GROUP_SUGGESTION",
+    rule: group.ruleId,
+    decisionLevel: "REVIEW_REQUIRED",
+    reason: "Lote determinístico fecha em centavos, mas exige conferência manual antes de integrar os totais conciliados.",
+    ...(ledgers[0] ? { ledger: ledgers[0] } : {}),
+    ...(statements[0] ? { statement: statements[0] } : {}),
+    ledgers,
+    statements,
+    valueDifference: centsToDecimal(group.differenceCents),
+    valueTolerance: "0.00",
+    ruleVersion: group.ruleVersion,
+    matchGroup: group,
+  };
 }
 
 function ledgerTransaction(record: LedgerRecord, accountId: string, signProfile: AccountMapping["signProfile"]): ReconciliationTransaction {
@@ -264,6 +483,33 @@ function projectSingle(
   };
 }
 
+function projectAmbiguousSingle(
+  transactionId: string,
+  ambiguityGroup: AmbiguityGroup,
+  ledgerById: Map<string, LedgerRecord>,
+  statementById: Map<string, StatementRecord>,
+): ReconciliationResult {
+  const ledger = ledgerById.get(transactionId);
+  const statement = statementById.get(transactionId);
+  const ledgers = ambiguityGroup.ledgerCandidateIds.map((id) => ledgerById.get(id)).filter((item): item is LedgerRecord => Boolean(item));
+  const statements = ambiguityGroup.statementCandidateIds.map((id) => statementById.get(id)).filter((item): item is StatementRecord => Boolean(item));
+  return {
+    id: deterministicId(["AMBIGUOUS_MATCH", ambiguityGroup.id, transactionId]),
+    status: "AMBIGUOUS_MATCH",
+    rule: "RF-02",
+    decisionLevel: "REVIEW_REQUIRED",
+    reason: ambiguityGroup.reason,
+    ...(ledger ? { ledger } : {}),
+    ...(statement ? { statement } : {}),
+    ledgers,
+    statements,
+    ...(ledger ? { candidates: statements } : {}),
+    ambiguityGroup,
+    valueTolerance: "0.00",
+    ruleVersion: "1.0",
+  };
+}
+
 function unmappedResult(status: ResultStatus, rule: string, ledger?: LedgerRecord, statement?: StatementRecord): ReconciliationResult {
   return {
     id: deterministicId([status, ledger?.id ?? "", statement?.id ?? ""]),
@@ -280,6 +526,7 @@ function unmappedResult(status: ResultStatus, rule: string, ledger?: LedgerRecor
 
 function publicStatus(type: ReconciliationMatchGroup["type"]): ResultStatus {
   if (type === "exact") return "AUTO_MATCH_EXACT";
+  if (type === "unique-value") return "AUTO_MATCH_UNIQUE_VALUE";
   if (type === "date-window") return "AUTO_MATCH_DATE_TOLERANCE";
   if (type === "daily-total") return "AUTO_MATCH_DAILY_TOTAL";
   if (type === "bank-net-zero") return "BANK_NET_ZERO";
@@ -289,12 +536,14 @@ function publicStatus(type: ReconciliationMatchGroup["type"]): ResultStatus {
 function reason(status: ResultStatus): string {
   const reasons: Record<ResultStatus, string> = {
     AUTO_MATCH_EXACT: "Data e valor em centavos coincidem.",
+    AUTO_MATCH_UNIQUE_VALUE: "O valor em centavos é único no escopo e competência confirmados.",
     AUTO_MATCH_DATE_TOLERANCE: "O mesmo valor foi encontrado em até três dias.",
     AUTO_MATCH_VALUE_DATE: "Data e valor coincidem.",
     AUTO_MATCH_GROUP: "Valores de mesmo sinal fecham exatamente em grupo.",
     AUTO_MATCH_DAILY_TOTAL: "Os resíduos dos dois lados fecham exatamente no dia.",
     BANK_NET_ZERO: "Movimentos bancários opostos no mesmo dia não produzem efeito líquido.",
     AUTO_APPLICATION_EXCLUDED: "Movimento bancário segregado como aplicação automática.",
+    GROUP_SUGGESTION: "Lote determinístico sugerido para conferência manual.",
     VALUE_ONLY_SUGGESTION: "O valor isolado não autoriza conciliação.",
     VALUE_DIVERGENCE: "Os valores em centavos divergem.",
     DATE_DIVERGENCE: "As datas estão fora da janela permitida.",
@@ -316,6 +565,7 @@ function summarize(ledgerAccount: string, results: ReconciliationResult[], mappi
   const statementBalance = uniqueStatements.reduce((sum, item) => sum + decimalToCents(item.value), 0n);
   const reconciledResults = results.filter((item) => reconciledStatuses.has(item.status));
   const nonReconciledResults = results.filter((item) => !reconciledStatuses.has(item.status));
+  const suggestedResults = results.filter((item) => item.status === "GROUP_SUGGESTION");
   return {
     ledgerAccount,
     statementAccounts: [...new Set(uniqueStatements.map((item) => `${item.bank} ${item.agency}/${item.bankAccount}`))],
@@ -325,10 +575,13 @@ function summarize(ledgerAccount: string, results: ReconciliationResult[], mappi
     reconciledCount: reconciledResults.length,
     reconciledValue: centsToDecimal(reconciledResults.reduce((sum, item) =>
       sum + (item.matchGroup ? BigInt(item.matchGroup.ledgerTotalCents) : item.ledger ? decimalToCents(item.ledger.value) : 0n), 0n).toString()),
+    suggestedGroupCount: suggestedResults.length,
+    suggestedLedgerCount: uniqueBy(suggestedResults.flatMap((item) => item.ledgers ?? (item.ledger ? [item.ledger] : []))).length,
+    suggestedStatementCount: uniqueBy(suggestedResults.flatMap((item) => item.statements ?? (item.statement ? [item.statement] : []))).length,
     divergenceCount: 0,
     ledgerWithoutStatementCount: results.filter((item) => item.status === "LEDGER_WITHOUT_STATEMENT").length,
     statementWithoutLedgerCount: results.filter((item) => item.status === "STATEMENT_WITHOUT_LEDGER").length,
-    ambiguityCount: 0,
+    ambiguityCount: results.filter((item) => item.status === "AMBIGUOUS_MATCH").length,
     duplicateCount: 0,
     status: nonReconciledResults.length === 0 ? "CONCILIADA" as const : "COM_DIVERGENCIAS" as const,
   };
@@ -436,11 +689,23 @@ function consolidatedControls(
     "RECONCILED_GROUP",
     "RECONCILED_DAILY_TOTAL",
   ]);
+  const suggestedTransactionIds = new Set(
+    results
+      .filter((item) => item.status === "GROUP_SUGGESTION" && item.matchGroup?.status === "suggested")
+      .flatMap((item) => [
+        ...(item.matchGroup?.bankTransactionIds ?? []),
+        ...(item.matchGroup?.ledgerTransactionIds ?? []),
+      ]),
+  );
 
   // 1. Ledger Coverage (Razão)
   const ledgerTransactions = transactions.filter((item) => item.source === "LEDGER");
   const ledgerCovered = ledgerTransactions.filter((item) => coveredStatuses.has(item.status));
-  const ledgerPending = ledgerTransactions.filter((item) => !coveredStatuses.has(item.status));
+  const ledgerSuggested = ledgerTransactions.filter((item) => suggestedTransactionIds.has(item.id));
+  const ledgerPending = ledgerTransactions.filter(
+    (item) => !coveredStatuses.has(item.status) && !suggestedTransactionIds.has(item.id),
+  );
+  const ledgerPotential = [...ledgerCovered, ...ledgerSuggested];
   const ledgerCoveredLines = ledgerCovered.length;
   const ledgerTotalLines = ledgerTransactions.length;
   const ledgerPendingLines = ledgerPending.length;
@@ -455,7 +720,11 @@ function consolidatedControls(
     (item) => item.source === "BANK" && item.status !== "EXCLUDED_AUTO_APPLICATION",
   );
   const stmtOperationalCovered = stmtOperationalTransactions.filter((item) => coveredStatuses.has(item.status));
-  const stmtOperationalPending = stmtOperationalTransactions.filter((item) => !coveredStatuses.has(item.status));
+  const stmtOperationalSuggested = stmtOperationalTransactions.filter((item) => suggestedTransactionIds.has(item.id));
+  const stmtOperationalPending = stmtOperationalTransactions.filter(
+    (item) => !coveredStatuses.has(item.status) && !suggestedTransactionIds.has(item.id),
+  );
+  const stmtOperationalPotential = [...stmtOperationalCovered, ...stmtOperationalSuggested];
   const stmtOperationalCoveredLines = stmtOperationalCovered.length;
   const stmtOperationalTotalLines = stmtOperationalTransactions.length;
   const stmtOperationalPendingLines = stmtOperationalPending.length;
@@ -468,9 +737,13 @@ function consolidatedControls(
   // 3. Statement Total Coverage (Extrato Total, todos os movimentos transacionais do extrato)
   const stmtTotalTransactions = transactions.filter((item) => item.source === "BANK");
   const stmtTotalCovered = stmtTotalTransactions.filter((item) => coveredStatuses.has(item.status));
+  const stmtTotalSuggested = stmtTotalTransactions.filter((item) => suggestedTransactionIds.has(item.id));
   const stmtTotalPending = stmtTotalTransactions.filter(
-    (item) => !coveredStatuses.has(item.status) && item.status !== "EXCLUDED_AUTO_APPLICATION",
+    (item) => !coveredStatuses.has(item.status)
+      && !suggestedTransactionIds.has(item.id)
+      && item.status !== "EXCLUDED_AUTO_APPLICATION",
   );
+  const stmtTotalPotential = [...stmtTotalCovered, ...stmtTotalSuggested];
   const stmtTotalCoveredLines = stmtTotalCovered.length;
   const stmtTotalTotalLines = stmtTotalTransactions.length;
   const stmtTotalPendingLines = stmtTotalPending.length;
@@ -496,7 +769,10 @@ function consolidatedControls(
   const counts = new Map<ResultStatus, bigint>();
   for (const result of results) counts.set(result.status, (counts.get(result.status) ?? 0n) + 1n);
   const pending = new Map<string, { bankCount: bigint; ledgerCount: bigint; bankValue: bigint; ledgerValue: bigint }>();
-  for (const transaction of transactions.filter((item) => item.status === "BANK_ONLY" || item.status === "LEDGER_ONLY")) {
+  for (const transaction of transactions.filter(
+    (item) => (item.status === "BANK_ONLY" || item.status === "LEDGER_ONLY")
+      && !suggestedTransactionIds.has(item.id),
+  )) {
     const current = pending.get(transaction.postingDate) ?? {
       bankCount: 0n,
       ledgerCount: 0n,
@@ -513,6 +789,30 @@ function consolidatedControls(
     pending.set(transaction.postingDate, current);
   }
   const balances = consolidatedBalances(confirmation, scopedLedgers, preflight);
+  const suggestedCoverage = coverageDimensions(
+    ledgerSuggested,
+    ledgerTransactions,
+    ledgerPending,
+    stmtOperationalSuggested,
+    stmtOperationalTransactions,
+    stmtOperationalPending,
+    stmtTotalSuggested,
+    stmtTotalTransactions,
+    stmtTotalPending,
+    "sugerida",
+  );
+  const potentialCoverage = coverageDimensions(
+    ledgerPotential,
+    ledgerTransactions,
+    ledgerPending,
+    stmtOperationalPotential,
+    stmtOperationalTransactions,
+    stmtOperationalPending,
+    stmtTotalPotential,
+    stmtTotalTransactions,
+    stmtTotalPending,
+    "potencial",
+  );
   return {
     tolerance: centsToDecimal(CONTROL_TOLERANCE_CENTS.toString()),
     signProfiles: [...new Set(confirmation.mappings.map((item) => item.signProfile))].sort(),
@@ -666,6 +966,8 @@ function consolidatedControls(
           label: "Cobertura geral operacional de valor",
         },
       },
+      suggested: suggestedCoverage,
+      potential: potentialCoverage,
     },
     countsByStatus: resultStatuses
       .filter((status) => counts.has(status))
@@ -678,6 +980,73 @@ function consolidatedControls(
       ledgerValue: centsToDecimal(item.ledgerValue.toString()),
       difference: centsToDecimal((item.bankValue - item.ledgerValue).toString()),
     })),
+  };
+}
+
+function coverageDimensions(
+  ledgerCovered: CoverageTransaction[],
+  ledgerTotal: CoverageTransaction[],
+  ledgerPending: CoverageTransaction[],
+  statementOperationalCovered: CoverageTransaction[],
+  statementOperationalTotal: CoverageTransaction[],
+  statementOperationalPending: CoverageTransaction[],
+  statementTotalCovered: CoverageTransaction[],
+  statementTotal: CoverageTransaction[],
+  statementTotalPending: CoverageTransaction[],
+  qualifier: "sugerida" | "potencial",
+): NonNullable<ProcessingControls["coverage"]["suggested"]> {
+  const overallCovered = [...ledgerCovered, ...statementOperationalCovered];
+  const overallTotal = [...ledgerTotal, ...statementOperationalTotal];
+  const overallPending = [...ledgerPending, ...statementOperationalPending];
+  return {
+    ledger: coverageBreakdown(ledgerCovered, ledgerTotal, ledgerPending, `Cobertura ${qualifier} do razão`),
+    statementOperational: coverageBreakdown(
+      statementOperationalCovered,
+      statementOperationalTotal,
+      statementOperationalPending,
+      `Cobertura ${qualifier} do extrato operacional`,
+    ),
+    statementTotal: coverageBreakdown(
+      statementTotalCovered,
+      statementTotal,
+      statementTotalPending,
+      `Cobertura ${qualifier} do extrato total`,
+    ),
+    overallOperational: coverageBreakdown(
+      overallCovered,
+      overallTotal,
+      overallPending,
+      `Cobertura geral operacional ${qualifier}`,
+    ),
+  };
+}
+
+function coverageBreakdown(
+  covered: CoverageTransaction[],
+  total: CoverageTransaction[],
+  pending: CoverageTransaction[],
+  label: string,
+): NonNullable<ProcessingControls["coverage"]["suggested"]>["ledger"] {
+  const coveredValue = totalCents(covered.map((item) => absoluteCents(item.amountCents)));
+  const totalValue = totalCents(total.map((item) => absoluteCents(item.amountCents)));
+  const pendingValue = totalCents(pending.map((item) => absoluteCents(item.amountCents)));
+  return {
+    lines: {
+      covered: String(covered.length),
+      total: String(total.length),
+      pending: String(pending.length),
+      percentage: percentage(BigInt(covered.length), BigInt(total.length)),
+      formula: `${label.toLocaleLowerCase("pt-BR")} / linhas elegíveis`,
+      label,
+    },
+    absoluteValue: {
+      covered: centsToDecimal(coveredValue.toString()),
+      total: centsToDecimal(totalValue.toString()),
+      pending: centsToDecimal(pendingValue.toString()),
+      percentage: percentage(coveredValue, totalValue),
+      formula: `${label.toLocaleLowerCase("pt-BR")} em valor absoluto / valor absoluto elegível`,
+      label: `${label} de valor`,
+    },
   };
 }
 
@@ -1127,4 +1496,3 @@ export function traceReconciliationCandidate(input: CandidateDiagnosticTraceInpu
     },
   };
 }
-

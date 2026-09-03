@@ -10,7 +10,9 @@ export interface StatementLayoutProfile {
 
   detection: {
     sheetNameAliases?: string[];
+    institutionPatterns?: string[];
     requiredHeaderGroups: string[][];
+    distinctiveHeaderGroups?: string[][];
     optionalHeaders?: string[];
     negativeSheetNames?: string[];
     minimumScore: number;

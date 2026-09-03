@@ -74,6 +74,28 @@ describe("common statement quality gates", () => {
     }));
   });
 
+  it("aceita conta cadastrada sem o dígito que está explícito no extrato", () => {
+    const document = currentAccount();
+    document.institutionCode = "237";
+    document.identity = {
+      bankCode: "237",
+      bankName: "BRADESCO",
+      agency: { raw: "03394", normalized: "3394" },
+      account: { raw: "0012545-8", normalized: "125458" },
+      accountDigit: "8",
+    };
+
+    const result = runStatementQualityGates({
+      document,
+      sourceSupported: true,
+      mappingStatus: "CONFIRMED",
+      crosscheckStatus: "NOT_PROVIDED",
+      expectedIdentity: { bankCode: "237", agency: "3394", account: "12545" },
+    });
+
+    expect(result.gates).toContainEqual(expect.objectContaining({ code: "IDENTITY", status: "PASSED" }));
+  });
+
   it("registra aprovação e falha da validação cruzada estruturada", () => {
     const evaluate = (crosscheckStatus: "PASSED" | "FAILED") => runStatementQualityGates({
       document: currentAccount(),

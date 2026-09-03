@@ -41,7 +41,7 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
        continue;
     }
 
-    const detection = detectLayoutResult(sheet, profiles, format);
+    const detection = detectLayoutResult(sheet, profiles, format, file.originalName);
     const layoutMatch = detection.match;
     if (!layoutMatch || detection.requiresReview) {
        const code = detection.warnings.includes("LAYOUT_AMBIGUOUS") ? "LAYOUT_AMBIGUOUS" : "LAYOUT_NOT_DETECTED";

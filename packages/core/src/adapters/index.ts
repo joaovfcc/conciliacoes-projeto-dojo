@@ -24,6 +24,11 @@ import { santanderCurrentAccountAdapter } from "./santander-cc.js"
 import { santanderInvestmentAdapter } from "./santander-investment.js"
 import { sofisaCurrentAccountAdapter } from "./sofisa-cc.js"
 import { sofisaPositionAdapter } from "./sofisa-position.js"
+import { paulistaCurrentAccountAdapter, paulistaLinkedAccountAdapter } from "./paulista.js"
+import { pineCurrentAccountAdapter, pineLinkedAccountAdapter } from "./pine.js"
+import { vortxCurrentAccountAdapter } from "./vortx.js"
+import { safraCurrentAccountAdapter } from "./safra.js"
+import { safraAutomaticProductsAdapter, safraCoePositionAdapter, safraFundPositionAdapter } from "./safra-investments.js"
 
 /**
  * All registered V2 adapters.
@@ -53,6 +58,15 @@ export const registeredV2Adapters: readonly StatementSourceAdapter[] = [
   sofisaPositionAdapter,
   bmgCurrentAccountAdapter,
   bmgPositionAdapter,
+  paulistaCurrentAccountAdapter,
+  paulistaLinkedAccountAdapter,
+  pineCurrentAccountAdapter,
+  pineLinkedAccountAdapter,
+  vortxCurrentAccountAdapter,
+  safraCurrentAccountAdapter,
+  safraFundPositionAdapter,
+  safraCoePositionAdapter,
+  safraAutomaticProductsAdapter,
 ]
 
 /**
@@ -78,3 +92,8 @@ export { santanderCurrentAccountAdapter } from "./santander-cc.js"
 export { santanderInvestmentAdapter } from "./santander-investment.js"
 export { sofisaCurrentAccountAdapter } from "./sofisa-cc.js"
 export { sofisaPositionAdapter } from "./sofisa-position.js"
+export { paulistaCurrentAccountAdapter, paulistaLinkedAccountAdapter } from "./paulista.js"
+export { pineCurrentAccountAdapter, pineLinkedAccountAdapter } from "./pine.js"
+export { vortxCurrentAccountAdapter } from "./vortx.js"
+export { safraCurrentAccountAdapter } from "./safra.js"
+export { safraAutomaticProductsAdapter, safraCoePositionAdapter, safraFundPositionAdapter } from "./safra-investments.js"

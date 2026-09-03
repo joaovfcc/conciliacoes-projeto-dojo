@@ -10,6 +10,7 @@ export const SANTANDER_CHECKING_XLSX_V1: StatementLayoutProfile = {
 
   detection: {
     sheetNameAliases: ["santander", "extrato", "conta corrente", "movimentacao", "movimentação"],
+    institutionPatterns: ["santander"],
     requiredHeaderGroups: [
       ["data", "data lançamento", "dt. lançamento", "dt balancete", "data balancete", "data de lançamento"],
       ["histórico", "descrição", "lançamento", "historico", "descricao"],
@@ -53,4 +54,3 @@ export const SANTANDER_CHECKING_XLSX_V1: StatementLayoutProfile = {
     closingBalancePatterns: ["saldo final", "saldo disponível", "saldo disponivel", "saldo atual"],
   },
 };
-

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import {
   bankAccountsConflict,
+  bankAccountsMatch,
   generateXlsx,
   preflightFiles,
   reconcile,
@@ -288,17 +289,25 @@ function validateConfirmation(input: ConfirmProcessingRequest, session: Reconcil
     if (!mapping.ledgerAccount || !mapping.statementFileIds.length) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "Todo mapeamento deve possuir uma conta contábil e ao menos um extrato.", 422);
     const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === mapping.ledgerAccount);
     if (!ledgerAccount) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "A conta contábil selecionada não foi encontrada no razão enviado.", 422);
-    if (!ledgerAccount.bank || !ledgerAccount.agency || !ledgerAccount.bankAccount) throw new PublicRuntimeError("ACCOUNT_IDENTITY_MISSING", "A conta bancária vinculada à conta contábil não pôde ser identificada no razão.", 422);
     for (const fileId of mapping.statementFileIds) {
       if (mappedFileIds.has(fileId)) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "Um extrato só pode ser relacionado a uma conta contábil por execução.", 422);
       mappedFileIds.add(fileId);
       const statement = eligibleStatements.find((item) => item.fileId === fileId);
       if (!statement) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "O mapeamento contém um extrato que não está elegível para conciliação.", 422);
-      if (!statement.bank || !statement.agency || !statement.account) throw new PublicRuntimeError("ACCOUNT_IDENTITY_MISSING", "Banco, agência ou conta não puderam ser identificados no extrato.", 422);
-      if (bankAccountsConflict(ledgerAccount, statement)) throw new PublicRuntimeError("BANK_ACCOUNT_MISMATCH", "A conta bancária do extrato não corresponde à conta vinculada à conta contábil selecionada.", 422);
+      if (bankAccountsConflict(ledgerAccount, statement) && !hasDeclaredLinkedPhysicalAccount(mapping, statement)) {
+        throw new PublicRuntimeError("BANK_ACCOUNT_MISMATCH", "A conta bancária do extrato não corresponde à conta vinculada à conta contábil selecionada. Para utilizá-la, confirme-a explicitamente como conta física vinculada ao mesmo escopo lógico.", 422);
+      }
     }
   }
   if (mappedFileIds.size !== eligibleStatements.length || eligibleStatements.some((item) => !mappedFileIds.has(item.fileId))) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "Confirme o relacionamento de todos os extratos elegíveis antes de conciliar.", 422);
+}
+
+function hasDeclaredLinkedPhysicalAccount(
+  mapping: ConfirmProcessingRequest["mappings"][number],
+  statement: { fileId: string; bank: string; agency: string; account: string },
+): boolean {
+  const declared = mapping.linkedPhysicalAccounts?.find((item) => item.statementFileId === statement.fileId);
+  return Boolean(declared && declared.role === "LINKED" && bankAccountsMatch(declared, statement));
 }
 
 

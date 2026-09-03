@@ -685,6 +685,7 @@ function consolidatedControls(
   const movementDifference = bankMovement - ledgerMovement;
   const coveredStatuses = new Set([
     "RECONCILED_EXACT",
+    "RECONCILED_UNIQUE_VALUE",
     "RECONCILED_DATE_WINDOW",
     "RECONCILED_GROUP",
     "RECONCILED_DAILY_TOTAL",

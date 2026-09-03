@@ -61,6 +61,10 @@ describe("fachada de reconciliação", () => {
       ledger: expect.objectContaining({ id: "l-valor-unico" }),
       statement: expect.objectContaining({ id: "s-valor-unico" }),
     }));
+    expect(output.controls.coverage.overallOperational).toMatchObject({
+      lines: { covered: "2", total: "2", pending: "0", percentage: "100.00" },
+      absoluteValue: { covered: "200.00", total: "200.00", pending: "0.00", percentage: "100.00" },
+    });
   });
 
   it("mantém valores repetidos como ambiguidade, sem escolher pares automaticamente", () => {

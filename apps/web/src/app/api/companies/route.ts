@@ -2,9 +2,22 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@conciliacao/core";
 import { authService } from "@/lib/auth-runtime";
 import { verifyAccessToken } from "@/lib/auth-jwt";
+import { createLocalCompany, listLocalCompanies } from "@/lib/local-store";
 
 export async function GET(request: NextRequest) {
   try {
+    if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+      const companies = listLocalCompanies().map((c) => ({
+        id: c.id,
+        organizationId: c.organizationId,
+        name: c.name,
+        roles: ["ADMIN", "PREPARER", "REVIEWER", "AUDITOR"],
+      }));
+      return NextResponse.json({
+        companies,
+        isOwner: true,
+      });
+    }
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Token não informado" } }, { status: 401 });
@@ -28,6 +41,18 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+      const body = (await request.json()) as { name?: string; documentNumber?: string };
+      const company = createLocalCompany(body.name?.trim() || "Nova Empresa", body.documentNumber?.trim());
+      return NextResponse.json({
+        company: {
+          id: company.id,
+          organizationId: company.organizationId,
+          name: company.name,
+          roles: ["ADMIN", "PREPARER", "REVIEWER", "AUDITOR"],
+        },
+      }, { status: 201 });
+    }
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Token não informado" } }, { status: 401 });

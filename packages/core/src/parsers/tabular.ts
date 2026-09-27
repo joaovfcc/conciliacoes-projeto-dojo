@@ -5,15 +5,15 @@ import { parseSpreadsheet } from "../tabular/spreadsheet-reader.js";
 import { classifySheet } from "../tabular/sheet-classifier.js";
 import { detectLayoutResult } from "../statements/layout-detector.js";
 import { parseStatement as parseStatementGeneric } from "../statements/generic-statement-parser.js";
-import { ITAU_CHECKING_XLSX_V1 } from "../statements/profiles/itau-checking-xlsx-v1.js";
-import { GENERIC_STATEMENT_V1 } from "../statements/profiles/generic-statement-v1.js";
+import { detectLayoutWithGemini, buildDynamicStatementProfile } from "../tabular/gemini-layout-detector.js";
 import type { SourceFileInput } from "./types.js";
 import type { StatementRecord, DetectedStatement, ImportIssue, InvestmentEntry } from "../types.js";
 import type { StatementLayoutProfile } from "../statements/statement-types.js";
 
-// PROFILES constant removed, injected dynamically instead.
-
-export async function parseTabularStatement(file: SourceFileInput, profiles: StatementLayoutProfile[]): Promise<{ records: StatementRecord[]; metadata: DetectedStatement; issues: ImportIssue[]; investments: InvestmentEntry[] }> {
+export async function parseTabularStatement(
+  file: SourceFileInput,
+  profiles: StatementLayoutProfile[],
+): Promise<{ records: StatementRecord[]; metadata: DetectedStatement; issues: ImportIssue[]; investments: InvestmentEntry[] }> {
   const extension = extensionOf(file.originalName).toUpperCase();
   const format = extension === "CSV" ? "CSV" : (extension as "XLSX" | "XLS" | "XLSM");
 
@@ -30,33 +30,61 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
   let openingBalance: string | undefined;
   let closingBalance: string | undefined;
 
-  for (const sheet of doc.sheets) {
-    const classification = classifySheet(sheet);
-    if (classification.role !== "TRANSACTIONAL") {
-       continue;
+  // Prefer sheets classified as TRANSACTIONAL; fall back to visible non-empty sheets if none match
+  const transactionalSheets = doc.sheets.filter((sheet) => classifySheet(sheet).role === "TRANSACTIONAL");
+  const sheetsToProcess = transactionalSheets.length > 0 ? transactionalSheets : doc.sheets.filter((s) => !s.hidden && s.rows.length > 0);
+
+  for (const sheet of sheetsToProcess) {
+    let profile: StatementLayoutProfile | undefined;
+    let headerRowIndex = 0;
+
+    // 1. Try local deterministic profile detection
+    if (profiles.length > 0) {
+      const detection = detectLayoutResult(sheet, profiles, format, file.originalName);
+      if (detection.match && !detection.requiresReview) {
+        profile = profiles.find((p) => p.id === detection.match!.profileId);
+        headerRowIndex = detection.match.headerRowIndex;
+      }
     }
 
-    if (profiles.length === 0) {
-       issues.push(issue("ERROR", "NO_PROFILES_AVAILABLE", `Nenhum layout de extrato disponível no catálogo`, file.id));
-       continue;
+    // 2. If deterministic detection didn't match with high confidence, use Gemini Layout Detective
+    if (!profile) {
+      try {
+        const geminiResult = await detectLayoutWithGemini(sheet, "STATEMENT");
+        if (geminiResult && geminiResult.confidence !== "LOW") {
+          profile = buildDynamicStatementProfile(sheet, geminiResult);
+          headerRowIndex = geminiResult.headerRowIndex;
+        }
+      } catch (err) {
+        console.warn(`[parseTabularStatement] Gemini layout detection error on sheet ${sheet.name}:`, err);
+      }
     }
 
-    const detection = detectLayoutResult(sheet, profiles, format, file.originalName);
-    const layoutMatch = detection.match;
-    if (!layoutMatch || detection.requiresReview) {
-       const code = detection.warnings.includes("LAYOUT_AMBIGUOUS") ? "LAYOUT_AMBIGUOUS" : "LAYOUT_NOT_DETECTED";
-       issues.push(issue("WARNING", code, `Layout não reconhecido com segurança na aba ${sheet.name}`, file.id));
-       continue;
+    // 3. Last fallback: if Gemini is unavailable, try best local candidate even if requiresReview was true
+    if (!profile && profiles.length > 0) {
+      const fallbackDetection = detectLayoutResult(sheet, profiles, format, file.originalName);
+      if (fallbackDetection.match) {
+        profile = profiles.find((p) => p.id === fallbackDetection.match!.profileId);
+        headerRowIndex = fallbackDetection.match.headerRowIndex;
+      }
     }
 
-    const profile = profiles.find(p => p.id === layoutMatch.profileId)!;
-    const parsed = parseStatementGeneric(sheet, profile, layoutMatch.headerRowIndex, format, file.originalName);
+    if (!profile) {
+      issues.push(issue("WARNING", "LAYOUT_NOT_DETECTED", `Layout não reconhecido na aba ${sheet.name}`, file.id));
+      continue;
+    }
+
+    const parsed = parseStatementGeneric(sheet, profile, headerRowIndex, format, file.originalName);
 
     const sheetBank = profile.bankCode || parsed.metadata?.bank || "";
     const sheetAgency = parsed.metadata?.agency || "";
     const sheetAccount = parsed.metadata?.account || "";
-    if (parsed.metadata?.openingBalance !== undefined && openingBalance === undefined) openingBalance = money(parsed.metadata.openingBalance);
-    if (parsed.metadata?.closingBalance !== undefined) closingBalance = money(parsed.metadata.closingBalance);
+    if (parsed.metadata?.openingBalance !== undefined && openingBalance === undefined) {
+      openingBalance = money(parsed.metadata.openingBalance);
+    }
+    if (parsed.metadata?.closingBalance !== undefined) {
+      closingBalance = money(parsed.metadata.closingBalance);
+    }
 
     for (const tx of parsed.transactions) {
       const record = statementRecord(file, tx.evidence.rowNumber, {
@@ -65,23 +93,28 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
         history: tx.description,
         value: money(tx.direction === "DEBIT" ? -tx.amount : tx.amount),
         ...(tx.balance !== undefined ? { runningBalance: money(tx.balance) } : {}),
-        sourceId: "", // Not robust enough yet
+        sourceId: "",
         bank: sheetBank,
         agency: sheetAgency,
         account: sheetAccount,
         extractionMethod: "TABULAR",
-        parser: profile.id
+        parser: profile.id,
       });
       records.push(record);
-      if (!profile.rules.balanceExclusionPatterns?.some((pattern) =>
-        new RegExp(pattern).test(normalizeForPattern(record.history)))) {
+      if (
+        !profile.rules.balanceExclusionPatterns?.some((pattern) =>
+          new RegExp(pattern).test(normalizeForPattern(record.history)),
+        )
+      ) {
         balanceMovements.push(record);
       }
     }
   }
 
   if (records.length === 0) {
-    issues.push(issue("ERROR", "TABULAR_SEM_MOVIMENTOS", "Nenhum movimento conciliável encontrado no arquivo tabular.", file.id));
+    issues.push(
+      issue("ERROR", "TABULAR_SEM_MOVIMENTOS", "Nenhum movimento conciliável encontrado no arquivo tabular.", file.id),
+    );
   }
 
   const metadata = statementMetadata(
@@ -100,5 +133,10 @@ export async function parseTabularStatement(file: SourceFileInput, profiles: Sta
 }
 
 function normalizeForPattern(value: string): string {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
 }

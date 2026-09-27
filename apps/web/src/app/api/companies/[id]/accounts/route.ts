@@ -2,10 +2,21 @@ import { NextResponse, type NextRequest } from "next/server";
 import { normalizeBankAccountRegistration, prisma } from "@conciliacao/core";
 import { authService } from "@/lib/auth-runtime";
 import { verifyAccessToken } from "@/lib/auth-jwt";
+import {
+  createLocalBankAccount,
+  createLocalBankLedgerMapping,
+  createLocalLedgerAccount,
+  listLocalCompanyAccounts,
+} from "@/lib/local-store";
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { id: companyId } = await context.params;
+
+    if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+      const data = listLocalCompanyAccounts(companyId);
+      return NextResponse.json(data);
+    }
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Token não informado" } }, { status: 401 });
@@ -52,6 +63,80 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { id: companyId } = await context.params;
+
+    if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+      const body = (await request.json()) as {
+        kind?: "LEDGER" | "BANK" | "MAPPING";
+        ledgerCode?: string;
+        description?: string;
+        sourceSystem?: string;
+        bankCode?: string;
+        bankName?: string;
+        agency?: string;
+        accountNumber?: string;
+        accountDigit?: string;
+        accountType?: "CHECKING" | "SAVINGS" | "INVESTMENT" | "OTHER";
+        bankAccountId?: string;
+        ledgerAccountId?: string;
+      };
+
+      if (body.kind === "LEDGER") {
+        const code = body.ledgerCode?.trim();
+        if (!code) {
+          return NextResponse.json({ error: { code: "INVALID_INPUT", message: "Código contábil é obrigatório" } }, { status: 400 });
+        }
+        const ledgerAccount = createLocalLedgerAccount(companyId, code, body.description);
+        return NextResponse.json({ ledgerAccount }, { status: 201 });
+      }
+
+      if (body.kind === "BANK") {
+        const bankAccount = createLocalBankAccount(companyId, {
+          bankCode: body.bankCode,
+          bankName: body.bankName,
+          agency: body.agency,
+          accountNumber: body.accountNumber,
+          accountDigit: body.accountDigit,
+          accountType: body.accountType,
+        });
+        return NextResponse.json({ bankAccount }, { status: 201 });
+      }
+
+      if (body.kind === "MAPPING") {
+        let bankId = body.bankAccountId;
+        let ledgerId = body.ledgerAccountId;
+
+        if (!bankId) {
+          const bank = createLocalBankAccount(companyId, {
+            bankCode: body.bankCode,
+            bankName: body.bankName,
+            agency: body.agency,
+            accountNumber: body.accountNumber,
+            accountDigit: body.accountDigit,
+            accountType: body.accountType,
+          });
+          bankId = bank.id;
+        }
+
+        if (!ledgerId) {
+          const code = body.ledgerCode?.trim();
+          if (!code) {
+            return NextResponse.json({ error: { code: "INVALID_INPUT", message: "Código contábil é obrigatório" } }, { status: 400 });
+          }
+          const ledger = createLocalLedgerAccount(companyId, code, body.description);
+          ledgerId = ledger.id;
+        }
+
+        const mapping = createLocalBankLedgerMapping(companyId, bankId, ledgerId);
+        return NextResponse.json({
+          ledgerAccount: mapping.ledgerAccount,
+          bankAccount: mapping.bankAccount,
+          mapping,
+        }, { status: 201 });
+      }
+
+      return NextResponse.json({ error: { code: "INVALID_KIND", message: "Tipo de conta inválido" } }, { status: 400 });
+    }
+
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Token não informado" } }, { status: 401 });

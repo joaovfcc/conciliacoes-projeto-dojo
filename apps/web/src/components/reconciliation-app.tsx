@@ -4,10 +4,12 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type {
   AccountMapping,
   InvestmentEntry,
+  LedgerRecord,
   PreflightResult,
   ProcessingResult,
   ReconciliationResult,
   SignProfile,
+  StatementRecord,
 } from "@conciliacao/core";
 import { bankAccountsMatch, compareBankAccountIdentities } from "@conciliacao/core/normalization";
 import {
@@ -17,6 +19,7 @@ import {
   formatDateForDisplay,
   investmentKindLabel,
   issueCategoryLabel,
+  knownCategoricalValueLabel,
   parserLabel,
   reconciliationRuleLabel,
   resultStatusLabel,
@@ -26,6 +29,7 @@ import { CompanyModal } from "./company-modal";
 import { EvidenceDrawer } from "./evidence-drawer";
 import { AdminUsersPanel } from "./admin-users-panel";
 import { CompaniesAccountsPanel } from "./companies-accounts-panel";
+import { ManualMatchModal } from "./manual-match-modal";
 
 type View = "RECONCILIATION" | "HISTORY" | "COMPANIES_ACCOUNTS" | "USERS";
 type Stage = "WELCOME" | "FILES" | "PREFLIGHT" | "CONFIRM" | "PROCESSING" | "RESULTS";
@@ -51,20 +55,50 @@ type HistoryItem = {
 };
 
 const sessionTokenHeader = "X-Reconciliation-Session-Token";
+const controlRequestTimeoutMs = 30_000;
+const statusRequestTimeoutMs = 15_000;
+const heavyOperationTimeoutMs = 180_000;
+const maximumStatusFailures = 5;
+const maximumProcessingWaitMs = 10 * 60_000;
 
 export const tabs = [
-  { id: "EXATOS", label: "Automáticos", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_EXACT" || item.status === "AUTO_MATCH_UNIQUE_VALUE" },
-  { id: "PROXIMIDADE", label: "Proximidade", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_DATE_TOLERANCE" },
-  { id: "GRUPOS", label: "Grupos", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_GROUP" },
-  { id: "SUGESTOES_GRUPOS", label: "Sugestões de grupos", test: (item: ReconciliationResult) => item.status === "GROUP_SUGGESTION" },
-  { id: "TOTAL_DIARIO", label: "Total diário", test: (item: ReconciliationResult) => item.status === "AUTO_MATCH_DAILY_TOTAL" },
-  { id: "COMPENSADOS", label: "Compensados", test: (item: ReconciliationResult) => item.status === "BANK_NET_ZERO" },
-  { id: "APLICACOES", label: "Aplicações automáticas", test: (item: ReconciliationResult) => item.status === "AUTO_APPLICATION_EXCLUDED" },
-  { id: "RAZAO_SEM_EXTRATO", label: "Razão sem extrato", test: (item: ReconciliationResult) => item.status === "LEDGER_WITHOUT_STATEMENT" },
-  { id: "EXTRATO_SEM_RAZAO", label: "Extrato sem razão", test: (item: ReconciliationResult) => item.status === "STATEMENT_WITHOUT_LEDGER" },
-  { id: "AMBIGUIDADES", label: "Ambiguidades e duplicidades", test: (item: ReconciliationResult) => item.status === "AMBIGUOUS_MATCH" || item.status === "POSSIBLE_DUPLICATE" },
-  { id: "INVESTIMENTOS", label: "Investimentos", test: (_item: ReconciliationResult) => false },
-  { id: "ARQUIVOS_ERROS", label: "Arquivos e erros", test: (_item: ReconciliationResult) => false },
+  {
+    id: "CONCILIADOS",
+    label: "Conciliados",
+    test: (item: ReconciliationResult) =>
+      item.status === "AUTO_MATCH_EXACT" ||
+      item.status === "AUTO_MATCH_UNIQUE_VALUE" ||
+      item.status === "AUTO_MATCH_DATE_TOLERANCE" ||
+      item.status === "AUTO_MATCH_GROUP" ||
+      item.status === "GROUP_SUGGESTION" ||
+      item.status === "AUTO_MATCH_DAILY_TOTAL" ||
+      item.status === "BANK_NET_ZERO",
+  },
+  {
+    id: "EXTRATO_SEM_RAZAO",
+    label: "Extrato sem razão",
+    test: (item: ReconciliationResult) => item.status === "STATEMENT_WITHOUT_LEDGER",
+  },
+  {
+    id: "RAZAO_SEM_EXTRATO",
+    label: "Razão sem extrato",
+    test: (item: ReconciliationResult) => item.status === "LEDGER_WITHOUT_STATEMENT",
+  },
+  {
+    id: "AMBIGUIDADES",
+    label: "Ambiguidades",
+    test: (item: ReconciliationResult) => item.status === "AMBIGUOUS_MATCH" || item.status === "POSSIBLE_DUPLICATE",
+  },
+  {
+    id: "APLICACOES",
+    label: "Aplicações automáticas",
+    test: (item: ReconciliationResult) => item.status === "AUTO_APPLICATION_EXCLUDED",
+  },
+  {
+    id: "ARQUIVOS_ERROS",
+    label: "Arquivos e erros",
+    test: (_item: ReconciliationResult) => false,
+  },
 ] as const;
 
 export function ReconciliationApp({
@@ -95,7 +129,7 @@ export function ReconciliationApp({
   const [branch, setBranch] = useState("");
   const [period, setPeriod] = useState("");
   const [result, setResult] = useState<ProcessingResult | null>(null);
-  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("EXATOS");
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("CONCILIADOS");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<ReconciliationResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,9 +137,14 @@ export function ReconciliationApp({
   const [selectedCompanyId, setSelectedCompanyId] = useState(() => initialCompanies.find(canPrepare)?.id ?? "");
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyRecordId, setHistoryRecordId] = useState<string | null>(null);
+  const [manualMatchItem, setManualMatchItem] = useState<ReconciliationResult | null>(null);
   const [preflightStatusText, setPreflightStatusText] = useState("Validando conteúdo e identificando contas contábeis e bancárias.");
   const [preflightProgress, setPreflightProgress] = useState(20);
   const [preflightActiveStep, setPreflightActiveStep] = useState<"UPLOAD" | "PARSING" | "MAPPING">("UPLOAD");
+  const confirmationAttemptRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
+  const pollingFailuresRef = useRef(0);
+  const pollingInFlightRef = useRef(false);
+  const processingDeadlineRef = useRef<number | null>(null);
   const effectAuthenticatedFetch = useEffectEvent(authenticatedFetch);
 
   const isAdmin = useMemo(
@@ -166,31 +205,45 @@ export function ReconciliationApp({
   // Polling de status do processamento
   useEffect(() => {
     if (!credential || (stage !== "PROCESSING" && stage !== "PREFLIGHT")) return;
-    const timer = window.setInterval(() => {
-      void effectAuthenticatedFetch(`/api/sessions/${credential.id}/status`, {
-        headers: sessionHeaders(credential),
-        cache: "no-store",
-      })
-        .then((response) => readResponse<{ session: PublicSession }>(response))
-        .then(({ session: current }) => {
-          setSession(current);
-          if (stage === "PREFLIGHT" && current.preflight) showPreflight(current.preflight);
-          else if (current.result) {
-            setResult(current.result);
-            setStage("RESULTS");
-          } else if (current.status === "FAILED") {
-            setError(current.errorMessage ?? "O processamento falhou e a sessão foi encerrada.");
-            void effectAuthenticatedFetch(`/api/sessions/${credential.id}/close`, {
-              method: "POST",
-              headers: sessionHeaders(credential),
-              keepalive: true,
-            });
-            setCredential(null);
-            setStage("WELCOME");
-          }
-        })
-        .catch((exception) => setError(messageOf(exception)));
-    }, 2_000);
+    const poll = async () => {
+      if (pollingInFlightRef.current) return;
+      pollingInFlightRef.current = true;
+      try {
+        const response = await requestWithTimeout(
+          effectAuthenticatedFetch,
+          `/api/sessions/${credential.id}/status`,
+          { headers: sessionHeaders(credential), cache: "no-store" },
+          statusRequestTimeoutMs,
+        );
+        const { session: current } = await readResponse<{ session: PublicSession }>(response);
+        pollingFailuresRef.current = 0;
+        setSession(current);
+        if (stage === "PREFLIGHT" && current.preflight) showPreflight(current.preflight);
+        else if (current.result) {
+          confirmationAttemptRef.current = null;
+          processingDeadlineRef.current = null;
+          setResult(current.result);
+          setStage("RESULTS");
+        } else if (["FAILED", "CANCELLED", "EXPIRED"].includes(current.status)) {
+          setError(current.errorMessage ?? "O processamento falhou ou a sessão expirou. Inicie uma nova tentativa.");
+          setCredential(null);
+          setStage("FILES");
+        } else if (processingDeadlineRef.current && Date.now() >= processingDeadlineRef.current) {
+          setError("O processamento excedeu o tempo máximo de espera. Verifique os arquivos e tente novamente.");
+          setStage(stage === "PREFLIGHT" ? "FILES" : "CONFIRM");
+        }
+      } catch (exception) {
+        pollingFailuresRef.current += 1;
+        if (pollingFailuresRef.current >= maximumStatusFailures) {
+          setError(`${messageOf(exception)} A verificação foi interrompida para evitar carregamento indefinido; tente novamente.`);
+          setStage(stage === "PREFLIGHT" ? "FILES" : "CONFIRM");
+        }
+      } finally {
+        pollingInFlightRef.current = false;
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, 2_000);
     return () => window.clearInterval(timer);
   }, [credential, stage]);
 
@@ -220,14 +273,12 @@ export function ReconciliationApp({
     setPreflight(detected);
     setCompany(detected.companies[0] ?? "");
     setBranch(detected.branches[0] ?? "");
-    const detectedPeriod =
-      detected.detectedPeriods.length === 1
-        ? detected.detectedPeriods[0]!.period
-        : (detected.detectedPeriods[0]?.period ?? "");
-    setPeriod(detectedPeriod);
+    setPeriod(preferredPreflightPeriod(detected));
 
     setStatementMappings(proposeStatementMappings(detected));
     setLinkedPhysicalStatementIds({});
+    confirmationAttemptRef.current = null;
+    processingDeadlineRef.current = null;
     setStage("CONFIRM");
   }
 
@@ -243,6 +294,9 @@ export function ReconciliationApp({
     setError("");
     setBusy(true);
     try {
+      const previousCredential = credential;
+      resetWorkflow("FILES");
+      if (previousCredential) void closeCredential(effectAuthenticatedFetch, previousCredential);
       setStage("FILES");
     } catch (exception) {
       setError(messageOf(exception));
@@ -258,15 +312,23 @@ export function ReconciliationApp({
     setPreflightProgress(12);
     setPreflightActiveStep("UPLOAD");
     setPreflightStatusText("Iniciando sessão de conciliação...");
+    pollingFailuresRef.current = 0;
+    processingDeadlineRef.current = Date.now() + maximumProcessingWaitMs;
     setStage("PREFLIGHT");
+    let activeCredential: SessionCredential | null = null;
     try {
-      const initResponse = await authenticatedFetch("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companyId: selectedCompanyId || companies[0]?.id }),
-      });
+      const initResponse = await requestWithTimeout(
+        authenticatedFetch,
+        "/api/sessions",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ companyId: selectedCompanyId || companies[0]?.id }),
+        },
+        controlRequestTimeoutMs,
+      );
       const initBody = await readResponse<{ session: PublicSession; token: string }>(initResponse);
-      const activeCredential = { id: initBody.session.id, token: initBody.token };
+      activeCredential = { id: initBody.session.id, token: initBody.token };
       setCredential(activeCredential);
 
       setPreflightProgress(25);
@@ -286,10 +348,12 @@ export function ReconciliationApp({
       setPreflightProgress(80);
       setPreflightStatusText("Identificando estrutura, leiautes e contas...");
 
-      const response = await authenticatedFetch(`/api/sessions/${activeCredential.id}/preflight`, {
-        method: "POST",
-        headers: sessionHeaders(activeCredential),
-      });
+      const response = await requestWithTimeout(
+        authenticatedFetch,
+        `/api/sessions/${activeCredential.id}/preflight`,
+        { method: "POST", headers: sessionHeaders(activeCredential) },
+        heavyOperationTimeoutMs,
+      );
 
       setPreflightActiveStep("MAPPING");
       setPreflightProgress(95);
@@ -300,6 +364,28 @@ export function ReconciliationApp({
       const detected = body.session.preflight;
       if (detected) showPreflight(detected);
     } catch (exception) {
+      if (activeCredential) {
+        try {
+          const checkResponse = await authenticatedFetch(
+            `/api/sessions/${activeCredential.id}/status`,
+            { headers: sessionHeaders(activeCredential) },
+          );
+          if (checkResponse.ok) {
+            const checkData = (await checkResponse.json()) as { session?: PublicSession };
+            if (checkData.session?.preflight) {
+              setSession(checkData.session);
+              showPreflight(checkData.session.preflight);
+              return;
+            }
+            if (checkData.session?.status === "PREFLIGHT") {
+              setPreflightStatusText("A leitura dos arquivos continua em andamento no servidor. Aguarde...");
+              return;
+            }
+          }
+        } catch {
+          // ignora falha de verificação secundária
+        }
+      }
       setError(messageOf(exception));
       setStage("FILES");
     } finally {
@@ -325,27 +411,62 @@ export function ReconciliationApp({
     }
     setBusy(true);
     setError("");
+    pollingFailuresRef.current = 0;
+    processingDeadlineRef.current = Date.now() + maximumProcessingWaitMs;
     setStage("PROCESSING");
     try {
-      const response = await authenticatedFetch(`/api/sessions/${credential.id}/confirm-and-process`, {
-        method: "POST",
-        headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company,
-          branch: branch || undefined,
-          period,
-          valueTolerance: valueTolerance.replace(",", "."),
-          dateToleranceDays: Number(dateToleranceDays),
-          mappings,
-          idempotencyKey: crypto.randomUUID(),
-        }),
-      });
+      const confirmation = {
+        company,
+        branch: branch || undefined,
+        period,
+        valueTolerance: valueTolerance.replace(",", "."),
+        dateToleranceDays: Number(dateToleranceDays),
+        mappings,
+      };
+      const fingerprint = JSON.stringify(confirmation);
+      const idempotencyKey = confirmationAttemptRef.current?.fingerprint === fingerprint
+        ? confirmationAttemptRef.current.idempotencyKey
+        : crypto.randomUUID();
+      confirmationAttemptRef.current = { fingerprint, idempotencyKey };
+      const response = await requestWithTimeout(
+        authenticatedFetch,
+        `/api/sessions/${credential.id}/confirm-and-process`,
+        {
+          method: "POST",
+          headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ ...confirmation, idempotencyKey }),
+        },
+        heavyOperationTimeoutMs,
+      );
       const body = await readResponse<{ session: PublicSession }>(response);
       setSession(body.session);
       setResult(body.session.result ?? null);
       setStage(body.session.result ? "RESULTS" : "PROCESSING");
       void reloadHistory();
     } catch (exception) {
+      if (credential) {
+        try {
+          const checkResponse = await authenticatedFetch(
+            `/api/sessions/${credential.id}/status`,
+            { headers: sessionHeaders(credential) },
+          );
+          if (checkResponse.ok) {
+            const checkData = (await checkResponse.json()) as { session?: PublicSession };
+            if (checkData.session?.result) {
+              setSession(checkData.session);
+              setResult(checkData.session.result);
+              setStage("RESULTS");
+              void reloadHistory();
+              return;
+            }
+            if (["RECONCILING", "VALIDATING", "EXTRACTING", "OCR_PROCESSING", "QUEUED"].includes(checkData.session?.status ?? "")) {
+              return;
+            }
+          }
+        } catch {
+          // ignora falha secundária
+        }
+      }
       setError(messageOf(exception));
       setStage("CONFIRM");
     } finally {
@@ -380,23 +501,34 @@ export function ReconciliationApp({
 
 
   async function closeSession(): Promise<void> {
-    if (credential) {
-      await authenticatedFetch(`/api/sessions/${credential.id}/close`, {
-        method: "POST",
-        headers: sessionHeaders(credential),
-        keepalive: true,
-      }).catch(() => undefined);
-    }
+    const previousCredential = credential;
+    resetWorkflow("WELCOME");
+    if (previousCredential) void closeCredential(authenticatedFetch, previousCredential);
+    void reloadHistory();
+  }
+
+  function resetWorkflow(nextStage: Stage): void {
     setCredential(null);
     setSession(null);
     setResult(null);
     setPreflight(null);
     setLedgerFile(null);
     setStatementFiles([]);
-    setStage("WELCOME");
+    setStatementMappings({});
+    setLinkedPhysicalStatementIds({});
+    setCompany("");
+    setBranch("");
+    setPeriod("");
+    setSelected(null);
+    setSearch("");
+    setActiveTab("CONCILIADOS");
+    confirmationAttemptRef.current = null;
+    pollingFailuresRef.current = 0;
+    processingDeadlineRef.current = null;
+    setStage(nextStage);
     setError("");
     setHistoryRecordId(null);
-    void reloadHistory();
+    setManualMatchItem(null);
   }
 
   async function openHistory(id: string): Promise<void> {
@@ -438,6 +570,213 @@ export function ReconciliationApp({
       return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleManualMatch(
+    selectedLedgerId: string,
+    selectedStatementId: string,
+    autoMatchRemaining: boolean,
+  ): Promise<void> {
+    if (!result || !manualMatchItem) return;
+
+    const ambiguityGroup = manualMatchItem.ambiguityGroup;
+    const allCandidateLedgers: LedgerRecord[] =
+      manualMatchItem.ledgers && manualMatchItem.ledgers.length > 0
+        ? [...manualMatchItem.ledgers]
+        : manualMatchItem.ledger
+        ? [manualMatchItem.ledger]
+        : [];
+
+    const allCandidateStatements: StatementRecord[] =
+      manualMatchItem.statements && manualMatchItem.statements.length > 0
+        ? [...manualMatchItem.statements]
+        : manualMatchItem.statement
+        ? [manualMatchItem.statement]
+        : [];
+
+    if (ambiguityGroup?.id) {
+      const groupRows = result.results.filter((r) => r.ambiguityGroup?.id === ambiguityGroup.id);
+      for (const r of groupRows) {
+        const rLedgers = r.ledgers ?? (r.ledger ? [r.ledger] : []);
+        for (const l of rLedgers) {
+          if (!allCandidateLedgers.some((item) => item.id === l.id)) {
+            allCandidateLedgers.push(l);
+          }
+        }
+        const rStatements = r.statements ?? (r.statement ? [r.statement] : []);
+        for (const s of rStatements) {
+          if (!allCandidateStatements.some((item) => item.id === s.id)) {
+            allCandidateStatements.push(s);
+          }
+        }
+      }
+    }
+
+    const selectedLedger = allCandidateLedgers.find((l) => l.id === selectedLedgerId);
+    const selectedStatement = allCandidateStatements.find((s) => s.id === selectedStatementId);
+
+    if (!selectedLedger || !selectedStatement) return;
+
+    const primaryReconciled: ReconciliationResult = {
+      id: `MANUAL_${selectedStatement.id}_${selectedLedger.id}`,
+      status: "AUTO_MATCH_EXACT",
+      rule: "MANUAL",
+      decisionLevel: "AUTOMATIC",
+      reason: "Conciliado manualmente pelo usuário na conferência de ambiguidades.",
+      ledger: selectedLedger,
+      statement: selectedStatement,
+      ledgers: [selectedLedger],
+      statements: [selectedStatement],
+      valueTolerance: "0.00",
+      valueDifference: "0.00",
+      ruleVersion: "1.0",
+    };
+
+    const remainingLedgers = allCandidateLedgers.filter((l) => l.id !== selectedLedgerId);
+    const remainingStatements = allCandidateStatements.filter((s) => s.id !== selectedStatementId);
+
+    const newResultsToAdd: ReconciliationResult[] = [primaryReconciled];
+
+    if (autoMatchRemaining && remainingLedgers.length === 1 && remainingStatements.length === 1) {
+      const remL = remainingLedgers[0]!;
+      const remS = remainingStatements[0]!;
+      newResultsToAdd.push({
+        id: `MANUAL_${remS.id}_${remL.id}`,
+        status: "AUTO_MATCH_EXACT",
+        rule: "MANUAL",
+        decisionLevel: "AUTOMATIC",
+        reason: "Conciliado manualmente pelo usuário (par restante do grupo de ambiguidade).",
+        ledger: remL,
+        statement: remS,
+        ledgers: [remL],
+        statements: [remS],
+        valueTolerance: "0.00",
+        valueDifference: "0.00",
+        ruleVersion: "1.0",
+      });
+    } else {
+      if (remainingStatements.length === 0 && remainingLedgers.length > 0) {
+        for (const remL of remainingLedgers) {
+          newResultsToAdd.push({
+            id: `LEDGER_WITHOUT_STATEMENT_${remL.id}`,
+            status: "LEDGER_WITHOUT_STATEMENT",
+            rule: "RF-09",
+            decisionLevel: "REVIEW_REQUIRED",
+            reason: "Lançamento do razão sem correspondência no extrato após conciliação manual.",
+            ledger: remL,
+            ledgers: [remL],
+            valueTolerance: "0.00",
+            ruleVersion: "1.0",
+          });
+        }
+      } else if (remainingLedgers.length === 0 && remainingStatements.length > 0) {
+        for (const remS of remainingStatements) {
+          newResultsToAdd.push({
+            id: `STATEMENT_WITHOUT_LEDGER_${remS.id}`,
+            status: "STATEMENT_WITHOUT_LEDGER",
+            rule: "RF-09",
+            decisionLevel: "REVIEW_REQUIRED",
+            reason: "Movimento de extrato sem correspondência no razão após conciliação manual.",
+            statement: remS,
+            statements: [remS],
+            valueTolerance: "0.00",
+            ruleVersion: "1.0",
+          });
+        }
+      } else if (remainingLedgers.length > 0 && remainingStatements.length > 0) {
+        const updatedGroup = ambiguityGroup
+          ? {
+              ...ambiguityGroup,
+              ledgerCandidateIds: remainingLedgers.map((l) => l.id),
+              statementCandidateIds: remainingStatements.map((s) => s.id),
+              reason: `Há ${remainingLedgers.length} lançamento(s) no razão e ${remainingStatements.length} movimento(s) no extrato com o mesmo valor após conciliação manual parcial.`,
+            }
+          : undefined;
+
+        for (const remL of remainingLedgers) {
+          newResultsToAdd.push({
+            id: `AMBIGUOUS_${updatedGroup?.id ?? "GRP"}_${remL.id}`,
+            status: "AMBIGUOUS_MATCH",
+            rule: "RF-02",
+            decisionLevel: "REVIEW_REQUIRED",
+            reason: updatedGroup?.reason ?? "Ambiguidade remanescente após conciliação manual parcial.",
+            ledger: remL,
+            ledgers: remainingLedgers,
+            statements: remainingStatements,
+            ...(updatedGroup ? { ambiguityGroup: updatedGroup } : {}),
+            valueTolerance: "0.00",
+            ruleVersion: "1.0",
+          });
+        }
+        for (const remS of remainingStatements) {
+          newResultsToAdd.push({
+            id: `AMBIGUOUS_${updatedGroup?.id ?? "GRP"}_${remS.id}`,
+            status: "AMBIGUOUS_MATCH",
+            rule: "RF-02",
+            decisionLevel: "REVIEW_REQUIRED",
+            reason: updatedGroup?.reason ?? "Ambiguidade remanescente após conciliação manual parcial.",
+            statement: remS,
+            ledgers: remainingLedgers,
+            statements: remainingStatements,
+            ...(updatedGroup ? { ambiguityGroup: updatedGroup } : {}),
+            valueTolerance: "0.00",
+            ruleVersion: "1.0",
+          });
+        }
+      }
+    }
+
+    const groupLedgerIds = new Set(allCandidateLedgers.map((l) => l.id));
+    const groupStatementIds = new Set(allCandidateStatements.map((s) => s.id));
+    const ambiguityGroupId = ambiguityGroup?.id;
+
+    const filteredExistingResults = result.results.filter((r) => {
+      if (ambiguityGroupId && r.ambiguityGroup?.id === ambiguityGroupId) {
+        return false;
+      }
+      if (r.id === manualMatchItem.id) {
+        return false;
+      }
+      if (
+        r.status === "AMBIGUOUS_MATCH" &&
+        ((r.ledger && groupLedgerIds.has(r.ledger.id)) ||
+          (r.statement && groupStatementIds.has(r.statement.id)))
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    const updatedResultsList = [...filteredExistingResults, ...newResultsToAdd];
+
+    const updatedProcessingResult: ProcessingResult = {
+      ...result,
+      results: updatedResultsList,
+    };
+
+    setResult(updatedProcessingResult);
+    setManualMatchItem(null);
+    if (selected?.id === manualMatchItem.id) {
+      setSelected(null);
+    }
+
+    try {
+      if (historyRecordId) {
+        await authenticatedFetch(`/api/reconciliation-history/${historyRecordId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ result: updatedProcessingResult }),
+        });
+      } else if (credential) {
+        await authenticatedFetch(`/api/sessions/${credential.id}/results`, {
+          method: "PATCH",
+          headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ result: updatedProcessingResult }),
+        });
+      }
+    } catch (err) {
+      console.warn("Não foi possível persistir a conciliação manual no backend:", err);
     }
   }
 
@@ -601,21 +940,31 @@ export function ReconciliationApp({
             )}
 
             {stage === "RESULTS" && result && (
-              <Results
-                result={result}
-                visible={visibleResults}
-                activeTab={activeTab}
-                setActiveTab={setActiveTab}
-                search={search}
-                setSearch={setSearch}
-                selected={selected}
-                setSelected={setSelected}
-                download={download}
-                close={closeSession}
-                busy={busy}
-                historyRecordId={historyRecordId}
-                onDeleteHistory={deleteHistory}
-              />
+              <>
+                <Results
+                  result={result}
+                  visible={visibleResults}
+                  activeTab={activeTab}
+                  setActiveTab={setActiveTab}
+                  search={search}
+                  setSearch={setSearch}
+                  selected={selected}
+                  setSelected={setSelected}
+                  download={download}
+                  close={closeSession}
+                  busy={busy}
+                  historyRecordId={historyRecordId}
+                  onDeleteHistory={deleteHistory}
+                  onOpenManualMatch={(item) => setManualMatchItem(item)}
+                />
+                {manualMatchItem && (
+                  <ManualMatchModal
+                    item={manualMatchItem}
+                    onClose={() => setManualMatchItem(null)}
+                    onConfirm={handleManualMatch}
+                  />
+                )}
+              </>
             )}
           </>
         )}
@@ -664,7 +1013,11 @@ export function ReconciliationApp({
       />
 
       {/* Gaveta de inspeção de evidência */}
-      <EvidenceDrawer selected={selected} onClose={() => setSelected(null)} />
+      <EvidenceDrawer
+        selected={selected}
+        onClose={() => setSelected(null)}
+        onOpenManualMatch={(item) => setManualMatchItem(item)}
+      />
     </>
   );
 }
@@ -1631,6 +1984,12 @@ function Confirmation(props: {
               {[bankLabel(statement.bank), statement.agency, statement.account].filter(Boolean).join(" · ") ||
                 "Conta não identificada"}
             </div>
+            {selectedLedger && (
+              <div className="text-muted text-sm">
+                Competência: {props.period ? formatPeriod(props.period) : "selecione"} · Perfil aplicado:{" "}
+                {knownCategoricalValueLabel(signProfileForLedger(selectedLedger))}
+              </div>
+            )}
           </div>
           <label className="field" style={{ margin: 0, minWidth: "260px" }}>
             <span className="sr-only">Conta contábil para {statement.originalName}</span>
@@ -1734,27 +2093,91 @@ function Results(props: {
   busy: boolean;
   historyRecordId?: string | null;
   onDeleteHistory?: (id: string) => Promise<boolean>;
+  onOpenManualMatch: (item: ReconciliationResult) => void;
 }) {
   const [visibleCount, setVisibleCount] = useState(25);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [subFilter, setSubFilter] = useState<"TODOS" | "EXATOS" | "GRUPOS" | "PROXIMIDADE" | "TOTAL_DIARIO" | "COMPENSADOS">("TODOS");
 
   useEffect(() => {
     setVisibleCount(25);
-  }, [props.activeTab, props.search]);
+  }, [props.activeTab, props.search, subFilter]);
 
   const controls = props.result.controls;
-  const countByStatus = (status: ReconciliationResult["status"]): string =>
-    controls?.countsByStatus.find((item) => item.status === status)?.count ?? "0";
-  const totals = props.result.summaries.reduce(
-    (sum, item) => ({
-      reconciled: sum.reconciled + item.reconciledCount,
-      divergences: sum.divergences + item.divergenceCount,
-      missing: sum.missing + item.ledgerWithoutStatementCount + item.statementWithoutLedgerCount,
-      difference: sum.difference + Number(item.balanceDifference),
-    }),
-    { reconciled: 0, divergences: 0, missing: 0, difference: 0 },
-  );
+
+  const totalStatementLines =
+    controls?.coverage.statementTotal?.lines.total ??
+    controls?.coverage.statementOperational?.lines.total ??
+    String(
+      props.result.files.reduce((acc, f) => acc + (f.recordCount ?? 0), 0) ||
+      props.result.results.filter((r) => r.statement || (r.statements && r.statements.length)).length,
+    );
+
+  const totalLedgerLines =
+    controls?.coverage.ledger?.lines.total ??
+    String(props.result.results.filter((r) => r.ledger || (r.ledgers && r.ledgers.length)).length);
+
+  const counts = useMemo(() => {
+    let exact = 0;
+    let groups = 0;
+    let dateTolerance = 0;
+    let dailyTotal = 0;
+    let netZero = 0;
+    let statementWithoutLedger = 0;
+    let ledgerWithoutStatement = 0;
+    let ambiguities = 0;
+    let autoApplications = 0;
+
+    for (const r of props.result.results) {
+      if (r.status === "AUTO_MATCH_EXACT" || r.status === "AUTO_MATCH_UNIQUE_VALUE") exact++;
+      else if (r.status === "AUTO_MATCH_GROUP" || r.status === "GROUP_SUGGESTION") groups++;
+      else if (r.status === "AUTO_MATCH_DATE_TOLERANCE") dateTolerance++;
+      else if (r.status === "AUTO_MATCH_DAILY_TOTAL") dailyTotal++;
+      else if (r.status === "BANK_NET_ZERO") netZero++;
+      else if (r.status === "STATEMENT_WITHOUT_LEDGER") statementWithoutLedger++;
+      else if (r.status === "LEDGER_WITHOUT_STATEMENT") ledgerWithoutStatement++;
+      else if (r.status === "AMBIGUOUS_MATCH" || r.status === "POSSIBLE_DUPLICATE") ambiguities++;
+      else if (r.status === "AUTO_APPLICATION_EXCLUDED") autoApplications++;
+    }
+
+    const allReconciled = exact + groups + dateTolerance + dailyTotal + netZero;
+
+    return {
+      exact,
+      groups,
+      dateTolerance,
+      dailyTotal,
+      netZero,
+      allReconciled,
+      statementWithoutLedger,
+      ledgerWithoutStatement,
+      ambiguities,
+      autoApplications,
+    };
+  }, [props.result.results]);
+
+  const itemsToDisplay = useMemo(() => {
+    if (props.activeTab !== "CONCILIADOS" || subFilter === "TODOS") {
+      return props.visible;
+    }
+    if (subFilter === "EXATOS") {
+      return props.visible.filter((item) => item.status === "AUTO_MATCH_EXACT" || item.status === "AUTO_MATCH_UNIQUE_VALUE");
+    }
+    if (subFilter === "GRUPOS") {
+      return props.visible.filter((item) => item.status === "AUTO_MATCH_GROUP" || item.status === "GROUP_SUGGESTION");
+    }
+    if (subFilter === "PROXIMIDADE") {
+      return props.visible.filter((item) => item.status === "AUTO_MATCH_DATE_TOLERANCE");
+    }
+    if (subFilter === "TOTAL_DIARIO") {
+      return props.visible.filter((item) => item.status === "AUTO_MATCH_DAILY_TOTAL");
+    }
+    if (subFilter === "COMPENSADOS") {
+      return props.visible.filter((item) => item.status === "BANK_NET_ZERO");
+    }
+    return props.visible;
+  }, [props.visible, props.activeTab, subFilter]);
 
   return (
     <>
@@ -1814,99 +2237,90 @@ function Results(props: {
           </div>
         </div>
 
-        {/* Cards de Indicadores */}
-        {controls ? (
-          <div className="summary-grid">
-            <Metric
-              label="Movimentação do banco (líquida)"
-              value={formatCurrency(Number(controls.movements.bankConciliable))}
-            />
-            <Metric label="Movimentação do razão (líquida)" value={formatCurrency(Number(controls.movements.ledger))} />
-            <Metric
-              label="Diferença banco × razão"
-              value={formatCurrency(Number(controls.movements.difference))}
-            />
-            <Metric
-              label="Cobertura confirmada"
-              value={`${controls.coverage.overallOperational?.lines.percentage ?? controls.coverage.lines.percentage}% (${controls.coverage.overallOperational?.lines.covered ?? controls.coverage.lines.covered}/${controls.coverage.overallOperational?.lines.total ?? controls.coverage.lines.total})`}
-            />
-            <Metric
-              label="Cobertura potencial"
-              value={
-                controls.coverage.potential?.overallOperational
-                  ? `${controls.coverage.potential.overallOperational.lines.percentage}% (${controls.coverage.potential.overallOperational.lines.covered}/${controls.coverage.potential.overallOperational.lines.total})`
-                  : "Não disponível"
-              }
-            />
-            <Metric
-              label="Linhas em sugestões"
-              value={
-                controls.coverage.suggested?.overallOperational
-                  ? `${controls.coverage.suggested.overallOperational.lines.covered} para revisão`
-                  : "0"
-              }
-            />
-            <Metric label="Ambiguidades por valor" value={countByStatus("AMBIGUOUS_MATCH")} />
-            <Metric
-              label="Cobertura do razão"
-              value={
-                controls.coverage.ledger
-                  ? `${controls.coverage.ledger.lines.percentage}% (${controls.coverage.ledger.lines.covered}/${controls.coverage.ledger.lines.total})`
-                  : `${controls.coverage.lines.percentage}%`
-              }
-            />
-            <Metric
-              label="Cobertura do extrato operacional"
-              value={
-                controls.coverage.statementOperational
-                  ? `${controls.coverage.statementOperational.lines.percentage}% (${controls.coverage.statementOperational.lines.covered}/${controls.coverage.statementOperational.lines.total})`
-                  : `${controls.coverage.lines.percentage}%`
-              }
-            />
-            <Metric
-              label="Cobertura do extrato total"
-              value={
-                controls.coverage.statementTotal
-                  ? `${controls.coverage.statementTotal.lines.percentage}% (${controls.coverage.statementTotal.lines.covered}/${controls.coverage.statementTotal.lines.total})`
-                  : `${controls.coverage.lines.percentage}%`
-              }
-            />
-            <Metric
-              label="Cobertura de valor operacional"
-              value={`${controls.coverage.overallOperational?.absoluteValue.percentage ?? controls.coverage.absoluteValue.percentage}%`}
-            />
-            <Metric
-              label="Diferença de saldo final"
-              value={
-                controls.balances.closingDifference === undefined
-                  ? "Não disponível"
-                  : formatCurrency(Number(controls.balances.closingDifference))
-              }
-            />
+        {/* Cards de Indicadores Objetivos */}
+        <div className="summary-grid" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
+          <div className="metric">
+            <span className="label">Linhas do Extrato</span>
+            <strong className="value">{totalStatementLines}</strong>
           </div>
-        ) : (
-          <div className="summary-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-            <Metric label="Conciliados automáticos" value={totals.reconciled} />
-            <Metric label="Divergências" value={totals.divergences} />
-            <Metric label="Pendências" value={totals.missing} />
-            <Metric label="Diferença de saldo" value={formatCurrency(totals.difference)} />
+          <div className="metric">
+            <span className="label">Linhas do Razão</span>
+            <strong className="value">{totalLedgerLines}</strong>
           </div>
+          <div className="metric" style={{ borderColor: "#86EFAC", background: "#F0FDF4" }}>
+            <span className="label" style={{ color: "#166534" }}>Conciliados</span>
+            <strong className="value" style={{ color: "#166534" }}>{counts.allReconciled}</strong>
+          </div>
+          <div className="metric" style={{ borderColor: counts.statementWithoutLedger > 0 ? "#FDBA74" : undefined, background: counts.statementWithoutLedger > 0 ? "#FFF7ED" : undefined }}>
+            <span className="label" style={{ color: counts.statementWithoutLedger > 0 ? "#C2410C" : undefined }}>Extrato sem razão</span>
+            <strong className="value" style={{ color: counts.statementWithoutLedger > 0 ? "#C2410C" : undefined }}>{counts.statementWithoutLedger}</strong>
+          </div>
+          <div className="metric" style={{ borderColor: counts.ledgerWithoutStatement > 0 ? "#FDBA74" : undefined, background: counts.ledgerWithoutStatement > 0 ? "#FFF7ED" : undefined }}>
+            <span className="label" style={{ color: counts.ledgerWithoutStatement > 0 ? "#C2410C" : undefined }}>Razão sem extrato</span>
+            <strong className="value" style={{ color: counts.ledgerWithoutStatement > 0 ? "#C2410C" : undefined }}>{counts.ledgerWithoutStatement}</strong>
+          </div>
+          <div className="metric" style={{ borderColor: counts.ambiguities > 0 ? "#93C5FD" : undefined, background: counts.ambiguities > 0 ? "#1D4ED8" : undefined }}>
+            <span className="label" style={{ color: counts.ambiguities > 0 ? "#1D4ED8" : undefined }}>Ambiguidades</span>
+            <strong className="value" style={{ color: counts.ambiguities > 0 ? "#1D4ED8" : undefined }}>{counts.ambiguities}</strong>
+          </div>
+        </div>
+
+        {/* Métricas Contábeis Detalhadas Opcionais (Sem poluição por padrão) */}
+        {controls && (
+          <details style={{ marginTop: "4px", marginBottom: "8px" }}>
+            <summary style={{ cursor: "pointer", fontSize: "12px", color: "var(--text-muted)", fontWeight: 600, padding: "4px 0" }}>
+              Ver métricas financeiras detalhadas e saldos
+            </summary>
+            <div className="summary-grid" style={{ gridTemplateColumns: "repeat(6, 1fr)", marginTop: "12px" }}>
+              <Metric label="Movimentação do banco (líquida)" value={formatCurrency(Number(controls.movements.bankConciliable))} />
+              <Metric label="Movimentação do razão (líquida)" value={formatCurrency(Number(controls.movements.ledger))} />
+              <Metric label="Diferença banco × razão" value={formatCurrency(Number(controls.movements.difference))} />
+              <Metric label="Diferença de saldo final" value={controls.balances.closingDifference === undefined ? "Não disponível" : formatCurrency(Number(controls.balances.closingDifference))} />
+              <Metric label="Cobertura confirmada" value={`${controls.coverage.overallOperational?.lines.percentage ?? controls.coverage.lines.percentage}%`} />
+              <Metric label="Cobertura potencial" value={controls.coverage.potential?.overallOperational ? `${controls.coverage.potential.overallOperational.lines.percentage}%` : "Não disponível"} />
+              <Metric label="Linhas em sugestões" value={controls.coverage.suggested?.overallOperational ? `${controls.coverage.suggested.overallOperational.lines.covered} para revisão` : "0"} />
+              <Metric label="Ambiguidades por valor" value={String(counts.ambiguities)} />
+              <Metric label="Cobertura do razão" value={controls.coverage.ledger ? `${controls.coverage.ledger.lines.percentage}%` : `${controls.coverage.lines.percentage}%`} />
+              <Metric label="Cobertura do extrato operacional" value={controls.coverage.statementOperational ? `${controls.coverage.statementOperational.lines.percentage}%` : `${controls.coverage.lines.percentage}%`} />
+            </div>
+          </details>
         )}
       </section>
 
       <section className="card panel" style={{ marginTop: 16 }}>
         <div className="tabs" role="tablist">
-          {tabs.map((tab) => (
-            <button
-              role="tab"
-              aria-selected={props.activeTab === tab.id}
-              className={`tab ${props.activeTab === tab.id ? "active" : ""}`}
-              key={tab.id}
-              onClick={() => props.setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
+          {tabs.map((tab) => {
+            const count =
+              tab.id === "CONCILIADOS"
+                ? counts.allReconciled
+                : tab.id === "EXTRATO_SEM_RAZAO"
+                ? counts.statementWithoutLedger
+                : tab.id === "RAZAO_SEM_EXTRATO"
+                ? counts.ledgerWithoutStatement
+                : tab.id === "AMBIGUIDADES"
+                ? counts.ambiguities
+                : tab.id === "APLICACOES"
+                ? counts.autoApplications
+                : null;
+
+            if (tab.id === "APLICACOES" && count === 0) return null;
+
+            return (
+              <button
+                role="tab"
+                aria-selected={props.activeTab === tab.id}
+                className={`tab ${props.activeTab === tab.id ? "active" : ""}`}
+                key={tab.id}
+                onClick={() => {
+                  props.setActiveTab(tab.id);
+                  if (tab.id !== "CONCILIADOS") setSubFilter("TODOS");
+                }}
+              >
+                {tab.label}
+                {count !== null && <span className="tab-badge">{count}</span>}
+              </button>
+            );
+          })}
         </div>
 
         {props.activeTab === "ARQUIVOS_ERROS" ? (
@@ -1915,6 +2329,59 @@ function Results(props: {
           <Investments entries={props.result.investments} />
         ) : (
           <>
+            {props.activeTab === "CONCILIADOS" && (
+              <div className="subtabs-bar" role="toolbar" aria-label="Filtro de conciliados">
+                <button
+                  type="button"
+                  className={`subtab-btn ${subFilter === "TODOS" ? "active" : ""}`}
+                  onClick={() => setSubFilter("TODOS")}
+                >
+                  Todos ({counts.allReconciled})
+                </button>
+                <button
+                  type="button"
+                  className={`subtab-btn ${subFilter === "EXATOS" ? "active" : ""}`}
+                  onClick={() => setSubFilter("EXATOS")}
+                >
+                  Exatos 1:1 ({counts.exact})
+                </button>
+                <button
+                  type="button"
+                  className={`subtab-btn ${subFilter === "GRUPOS" ? "active" : ""}`}
+                  onClick={() => setSubFilter("GRUPOS")}
+                >
+                  Lotes / Desdobros ({counts.groups})
+                </button>
+                {counts.dateTolerance > 0 && (
+                  <button
+                    type="button"
+                    className={`subtab-btn ${subFilter === "PROXIMIDADE" ? "active" : ""}`}
+                    onClick={() => setSubFilter("PROXIMIDADE")}
+                  >
+                    Por Data ({counts.dateTolerance})
+                  </button>
+                )}
+                {counts.dailyTotal > 0 && (
+                  <button
+                    type="button"
+                    className={`subtab-btn ${subFilter === "TOTAL_DIARIO" ? "active" : ""}`}
+                    onClick={() => setSubFilter("TOTAL_DIARIO")}
+                  >
+                    Total Diário ({counts.dailyTotal})
+                  </button>
+                )}
+                {counts.netZero > 0 && (
+                  <button
+                    type="button"
+                    className={`subtab-btn ${subFilter === "COMPENSADOS" ? "active" : ""}`}
+                    onClick={() => setSubFilter("COMPENSADOS")}
+                  >
+                    Compensados ({counts.netZero})
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="table-tools">
               <input
                 className="filter"
@@ -1924,26 +2391,14 @@ function Results(props: {
               />
             </div>
 
-            {props.activeTab === "TOTAL_DIARIO" && (
-              <div className="notice warning">
-                O total diário comprova o fechamento do lote; não representa pareamento individual entre as linhas.
-              </div>
-            )}
-
-            {props.activeTab === "SUGESTOES_GRUPOS" && (
-              <div className="notice warning">
-                Estas combinações fecham em centavos e foram agrupadas de forma determinística, mas não entram nos totais conciliados até a conferência manual.
-              </div>
-            )}
-
             {props.activeTab === "AMBIGUIDADES" && (
               <div className="notice warning">
-                Cada grupo reúne todos os candidatos com o mesmo valor. A aplicação não escolhe nenhum par enquanto a evidência não tornar a decisão inequívoca.
+                Cada grupo reúne candidatos com o mesmo valor. A aplicação não escolhe nenhum par automaticamente para evitar falso positivo contábil.
               </div>
             )}
 
             <div className="table-wrap">
-              {props.visible.length ? (
+              {itemsToDisplay.length ? (
                 <table>
                   <thead>
                     <tr>
@@ -1956,7 +2411,7 @@ function Results(props: {
                     </tr>
                   </thead>
                   <tbody>
-                    {props.visible.slice(0, visibleCount).map((item) => (
+                    {itemsToDisplay.slice(0, visibleCount).map((item) => (
                       <tr key={item.id}>
                         <td>
                           <span className={`status ${item.decisionLevel === "AUTOMATIC" ? "ok" : "problem"}`}>
@@ -1971,17 +2426,28 @@ function Results(props: {
                             : "—"}
                         </td>
                         <td>{reconciliationRuleLabel(item.rule)}</td>
-                        <td style={{ textAlign: "right" }}>
-                          <button
-                            id={`evidence-trigger-${item.id}`}
-                            type="button"
-                            className="button secondary btn-sm"
-                            aria-controls={`evidence-${item.id}`}
-                            aria-expanded={props.selected?.id === item.id}
-                            onClick={() => props.setSelected(item)}
-                          >
-                            Ver evidência
-                          </button>
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          <div style={{ display: "inline-flex", gap: "6px", alignItems: "center", justifyContent: "flex-end" }}>
+                            {(item.status === "AMBIGUOUS_MATCH" || item.ambiguityGroup) && (
+                              <button
+                                type="button"
+                                className="button btn-sm"
+                                onClick={() => props.onOpenManualMatch(item)}
+                              >
+                                Conciliar manual
+                              </button>
+                            )}
+                            <button
+                              id={`evidence-trigger-${item.id}`}
+                              type="button"
+                              className="button secondary btn-sm"
+                              aria-controls={`evidence-${item.id}`}
+                              aria-expanded={props.selected?.id === item.id}
+                              onClick={() => props.setSelected(item)}
+                            >
+                              Ver evidência
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1992,10 +2458,10 @@ function Results(props: {
               )}
             </div>
 
-            {props.visible.length > visibleCount && (
+            {itemsToDisplay.length > visibleCount && (
               <div className="actions" style={{ marginTop: "16px" }}>
                 <button className="button secondary" onClick={() => setVisibleCount((count) => count + 25)}>
-                  Mostrar mais registros ({props.visible.length - visibleCount} restantes)
+                  Mostrar mais registros ({itemsToDisplay.length - visibleCount} restantes)
                 </button>
               </div>
             )}
@@ -2003,7 +2469,13 @@ function Results(props: {
         )}
       </section>
 
-      {props.selected && <Evidence item={props.selected} close={() => props.setSelected(null)} />}
+      {props.selected && (
+        <Evidence
+          item={props.selected}
+          close={() => props.setSelected(null)}
+          onOpenManualMatch={props.onOpenManualMatch}
+        />
+      )}
     </>
   );
 }
@@ -2094,7 +2566,15 @@ function Investments({ entries }: { entries: InvestmentEntry[] }) {
   );
 }
 
-function Evidence({ item, close }: { item: ReconciliationResult; close: () => void }) {
+function Evidence({
+  item,
+  close,
+  onOpenManualMatch,
+}: {
+  item: ReconciliationResult;
+  close: () => void;
+  onOpenManualMatch?: (item: ReconciliationResult) => void;
+}) {
   const panel = useRef<HTMLElement>(null);
   useEffect(() => {
     panel.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2125,9 +2605,20 @@ function Evidence({ item, close }: { item: ReconciliationResult; close: () => vo
             <p>Fechamento no nível do lote diário, sem pareamento individual.</p>
           )}
         </div>
-        <button type="button" className="button secondary" onClick={close}>
-          Fechar
-        </button>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          {(item.status === "AMBIGUOUS_MATCH" || item.ambiguityGroup) && onOpenManualMatch && (
+            <button
+              type="button"
+              className="button btn-sm"
+              onClick={() => onOpenManualMatch(item)}
+            >
+              Conciliar este grupo manual
+            </button>
+          )}
+          <button type="button" className="button secondary" onClick={close}>
+            Fechar
+          </button>
+        </div>
       </div>
       <div className="upload-grid">
         <div>
@@ -2203,10 +2694,7 @@ export function confirmedMappings(
   const mappings: AccountMapping[] = [];
   for (const [account, statementFileIds] of byAccount.entries()) {
     const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === account);
-    const signProfile: SignProfile =
-      ledgerAccount?.balanceMovementEffect === "SUBTRACTS_FROM_BALANCE"
-        ? "BANK_LIABILITY"
-        : "BANK_ASSET";
+    const signProfile = signProfileForLedger(ledgerAccount);
 
     const linkedPhysicalAccounts = statementFileIds.flatMap((fileId) => {
       const statement = preflight.statements.find((item) => item.fileId === fileId);
@@ -2223,6 +2711,33 @@ export function confirmedMappings(
   }
 
   return mappings;
+}
+
+export function preferredPreflightPeriod(preflight: PreflightResult): string {
+  const available = new Set(preflight.detectedPeriods.map((item) => item.period));
+  const statementPeriodSets = preflight.statements
+    .filter((item) => item.reconciliationEligible && item.periods.length > 0)
+    .map((item) => new Set(item.periods.filter((period) => available.has(period))));
+
+  if (statementPeriodSets.length > 0) {
+    const common = [...statementPeriodSets[0]!].filter((period) =>
+      statementPeriodSets.every((periods) => periods.has(period)),
+    );
+    if (common.length === 1) return common[0]!;
+
+    const uniqueStatementPeriods = new Set(statementPeriodSets.flatMap((periods) => [...periods]));
+    if (uniqueStatementPeriods.size === 1) return [...uniqueStatementPeriods][0]!;
+  }
+
+  return preflight.detectedPeriods.length === 1 ? preflight.detectedPeriods[0]!.period : "";
+}
+
+function signProfileForLedger(
+  ledgerAccount: PreflightResult["ledgerAccounts"][number] | undefined,
+): SignProfile {
+  return ledgerAccount?.balanceMovementEffect === "SUBTRACTS_FROM_BALANCE"
+    ? "BANK_LIABILITY"
+    : "BANK_ASSET";
 }
 
 export function proposeStatementMappings(preflight: PreflightResult): Record<string, string> {
@@ -2280,16 +2795,21 @@ async function uploadFile(
   kind: StoredFile["kind"],
 ): Promise<void> {
   const authorized = await readResponse<{ file: StoredFile; upload: { mode: "local" | "presigned"; url: string } }>(
-    await authenticatedFetch(`/api/sessions/${credential.id}/uploads/authorize`, {
-      method: "POST",
-      headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kind,
-        originalName: file.name,
-        contentType: file.type || "application/octet-stream",
-        size: file.size,
-      }),
-    }),
+    await requestWithTimeout(
+      authenticatedFetch,
+      `/api/sessions/${credential.id}/uploads/authorize`,
+      {
+        method: "POST",
+        headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          originalName: file.name,
+          contentType: file.type || "application/octet-stream",
+          size: file.size,
+        }),
+      },
+      controlRequestTimeoutMs,
+    ),
   );
   const uploadResponse =
     authorized.upload.mode === "local"
@@ -2304,13 +2824,47 @@ async function uploadFile(
         body: file,
       });
   if (!uploadResponse.ok) await readResponse(uploadResponse);
-  await readResponse(
-    await authenticatedFetch(`/api/sessions/${credential.id}/uploads/complete`, {
+  await readResponse(await requestWithTimeout(
+    authenticatedFetch,
+    `/api/sessions/${credential.id}/uploads/complete`,
+    {
       method: "POST",
       headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
       body: JSON.stringify({ fileId: authorized.file.id }),
-    }),
-  );
+    },
+    controlRequestTimeoutMs,
+  ));
+}
+
+async function closeCredential(authenticatedFetch: AuthenticatedFetch, credential: SessionCredential): Promise<void> {
+  await requestWithTimeout(
+    authenticatedFetch,
+    `/api/sessions/${credential.id}/close`,
+    { method: "POST", headers: sessionHeaders(credential), keepalive: true },
+    controlRequestTimeoutMs,
+  ).catch(() => undefined);
+}
+
+export async function requestWithTimeout(
+  request: AuthenticatedFetch,
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await Promise.race([
+      request(input, { ...init, signal: controller.signal }),
+      new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener("abort", () => {
+          reject(new Error("O servidor demorou mais que o esperado para responder."));
+        }, { once: true });
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 function sessionHeaders(credential: SessionCredential): Record<string, string> {
@@ -2348,8 +2902,14 @@ function fallbackHttpMessage(status: number): string {
 
 function messageOf(value: unknown): string {
   if (value instanceof TypeError)
-    return "Não foi possível conectar ao servidor local. Verifique sua conexão e tente novamente.";
-  return value instanceof Error ? value.message : "Ocorreu uma inconsistência temporária ao processar a solicitação.";
+    return "Não foi possível conectar ao servidor local. Verifique se a aplicação está em execução e tente novamente.";
+  if (value instanceof Error) {
+    if (value.message.includes("demorou mais que o esperado")) {
+      return "O processamento dos arquivos está levando mais tempo que o esperado devido ao volume de lançamentos. O servidor continua executando; aguarde alguns instantes ou tente novamente.";
+    }
+    return value.message;
+  }
+  return "Ocorreu uma inconsistência temporária ao processar a solicitação.";
 }
 
 function formatPeriod(period: string): string {

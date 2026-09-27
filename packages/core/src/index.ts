@@ -149,7 +149,15 @@ export * from "./reconciliation/infrastructure/InMemoryReconciliationRunReposito
 export * from "./reconciliation/domain/CompletedReconciliation.js";
 export * from "./reconciliation/infrastructure/PrismaCompletedReconciliationRepository.js";
 export * from "./reconciliation/infrastructure/InMemoryCompletedReconciliationRepository.js";
+export * from "./reconciliation/infrastructure/SqliteCompletedReconciliationRepository.js";
 export * from "./shared/domain/Authorization.js";
 export * from "./database.js";
 export * from "./auth/index.js";
 export * from "./presentation.js";
+export * from "./advisor/contracts.js";
+export * from "./advisor/LlmMatchAdvisor.js";
+export * from "./advisor/candidate-generator.js";
+export * from "./advisor/response-validator.js";
+export * from "./advisor/evidence-rehydrator.js";
+export * from "./advisor/advisor-orchestrator.js";
+

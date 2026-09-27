@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, S3Client, type S3ClientConfig } from "@aws-sdk/client-s3";
@@ -15,7 +16,19 @@ export interface ObjectStore {
 export class LocalObjectStore implements ObjectStore {
   readonly mode = "local" as const;
   private readonly root: string;
-  constructor(config: RuntimeConfig) { this.root = resolve(config.localStoragePath); }
+  constructor(config: RuntimeConfig) {
+    let resolved = resolve(config.localStoragePath);
+    if (!existsSync(resolved)) {
+      const upOne = resolve(process.cwd(), "..", config.localStoragePath);
+      const upTwo = resolve(process.cwd(), "../..", config.localStoragePath);
+      if (existsSync(upTwo)) {
+        resolved = upTwo;
+      } else if (existsSync(upOne)) {
+        resolved = upOne;
+      }
+    }
+    this.root = resolved;
+  }
   async put(key: string, data: Buffer) { const path = this.path(key); await mkdir(dirname(path), { recursive: true }); await writeFile(path, data, { flag: "wx" }); }
   async get(key: string) { return readFile(this.path(key)); }
   async delete(key: string) { await rm(this.path(key), { force: true }); }

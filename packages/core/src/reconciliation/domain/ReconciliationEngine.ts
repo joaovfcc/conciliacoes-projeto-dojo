@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { normalizeDocumentId } from "../../normalization.js";
+import { normalizeDocumentId, NON_DOCUMENT_NUMERIC_CODES, isDocumentIdentifier } from "../../normalization.js";
+
+export { isDocumentIdentifier };
 
 export const RECONCILIATION_RULE_VERSION = "1.0" as const;
 
@@ -903,12 +905,6 @@ type ExactLedgerGroup = {
   tokens: string[];
   cursor: number;
 };
-
-export function isDocumentIdentifier(value: string | undefined): boolean {
-  if (!value) return false;
-  const norm = normalizeDocumentId(value);
-  return /^\d+$/.test(norm) || /^[A-Z]{2,10}[-_\s/]?\d+$/i.test(norm) || /^\d+-[A-Z0-9]+$/i.test(norm);
-}
 
 export function hasDivergentDocument(left: PreparedTransaction, right: PreparedTransaction): boolean {
   const leftDoc = left.documentId ? normalizeDocumentId(left.documentId) : "";

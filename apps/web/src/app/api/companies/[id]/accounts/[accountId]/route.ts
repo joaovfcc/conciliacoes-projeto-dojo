@@ -2,10 +2,19 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@conciliacao/core";
 import { authService } from "@/lib/auth-runtime";
 import { verifyAccessToken } from "@/lib/auth-jwt";
+import { deleteLocalAccount } from "@/lib/local-store";
 
 export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string; accountId: string }> }) {
   try {
     const { id: companyId, accountId } = await context.params;
+    const { searchParams } = new URL(request.url);
+    const type = searchParams.get("type");
+
+    if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+      deleteLocalAccount(accountId, (type as "BANK" | "LEDGER" | "MAPPING") || "MAPPING", companyId);
+      return NextResponse.json({ success: true });
+    }
+
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Token não informado" } }, { status: 401 });
@@ -21,9 +30,6 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     if (!hasAdminAccess) {
       return NextResponse.json({ error: { code: "FORBIDDEN", message: "Apenas administradores podem remover contas" } }, { status: 403 });
     }
-
-    const { searchParams } = new URL(request.url);
-    const type = searchParams.get("type");
 
     if (type === "MAPPING") {
       const deleted = await prisma.bankLedgerMapping.deleteMany({ where: { id: accountId, companyId } });

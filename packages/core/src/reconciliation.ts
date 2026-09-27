@@ -15,7 +15,7 @@ import {
   type ReconciliationStatus,
   type ReconciliationTransaction,
 } from "./reconciliation/domain/ReconciliationEngine.js";
-import { normalizeDocumentId, dayDifference } from "./normalization.js";
+import { normalizeDocumentId, dayDifference, resolveTransactionDocument } from "./normalization.js";
 import type {
   AccountMapping,
   AmbiguityGroup,
@@ -189,7 +189,7 @@ function reconcilePartition(
   }).run(transactions);
   const auditByGroup = new Map(engine.audit.filter((item) => item.transactionIds.length > 1).map((item) => [transactionSetKey(item.transactionIds), item]));
   const results = engine.matchGroups.map((group) => projectGroup(group, auditByGroup.get(transactionSetKey([...group.bankTransactionIds, ...group.ledgerTransactionIds])), ledgerById, statementById));
-  const suggestions = suggestDeterministicBatches(ledgers, statements, mapping.signProfile, engine, confirmation.evaluatedAt ?? EPOCH);
+  const suggestions = suggestDeterministicBatches(ledgers, statements, mapping.signProfile, engine, confirmation.evaluatedAt ?? EPOCH, confirmation.dateToleranceDays);
   const suggestedTransactionIds = new Set(
     suggestions.flatMap((group) => [...group.bankTransactionIds, ...group.ledgerTransactionIds]),
   );
@@ -256,11 +256,13 @@ function suggestDeterministicBatches(
   signProfile: AccountMapping["signProfile"],
   engine: ReconciliationEngineOutput,
   evaluatedAt: string,
+  dateToleranceDays = 2,
 ): ReconciliationMatchGroup[] {
   const statusById = new Map(engine.transactions.map((item) => [item.id, item.status]));
   const pendingLedgers = ledgers.filter((item) => statusById.get(item.id) === "LEDGER_ONLY" && eligibleLedger(item));
   const pendingStatements = statements.filter((item) => statusById.get(item.id) === "BANK_ONLY" && eligibleStatement(item));
   const candidates: ReconciliationMatchGroup[] = [
+    ...documentGroupBatchCandidates(pendingStatements, pendingLedgers, signProfile, evaluatedAt, dateToleranceDays),
     ...oneToManyBatchCandidates(pendingStatements, pendingLedgers, signProfile, evaluatedAt),
     ...manyToOneBatchCandidates(pendingStatements, pendingLedgers, signProfile, evaluatedAt),
   ];
@@ -275,6 +277,94 @@ function suggestDeterministicBatches(
   return candidates
     .filter((candidate) => [...candidate.bankTransactionIds, ...candidate.ledgerTransactionIds].every((id) => references.get(id) === 1))
     .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function documentGroupBatchCandidates(
+  statements: StatementRecord[],
+  ledgers: LedgerRecord[],
+  signProfile: AccountMapping["signProfile"],
+  evaluatedAt: string,
+  dateToleranceDays = 2,
+): ReconciliationMatchGroup[] {
+  const candidates: ReconciliationMatchGroup[] = [];
+
+  // 1. One bank statement to Many ledger records (e.g. statement bank debit 5578.56 matching ledger principal 5572.14 + interest 6.42)
+  const ledgersByDoc = new Map<string, LedgerRecord[]>();
+  for (const ledger of ledgers) {
+    const doc = resolveTransactionDocument(ledger.document, ledger.history);
+    if (!doc) continue;
+    const list = ledgersByDoc.get(doc) ?? [];
+    list.push(ledger);
+    ledgersByDoc.set(doc, list);
+  }
+
+  for (const statement of statements) {
+    const doc = resolveTransactionDocument(statement.document, statement.history);
+    if (!doc) continue;
+    const matchingLedgers = ledgersByDoc.get(doc) ?? [];
+    if (matchingLedgers.length < 2) continue;
+
+    const withinWindow = matchingLedgers.filter(
+      (l) => dayDifference(statement.date, l.date) <= dateToleranceDays,
+    );
+    if (withinWindow.length < 2) continue;
+
+    const bankTotal = decimalToCents(statement.value);
+    const ledgerTotal = totalLedgerBatch(withinWindow, signProfile);
+    if (bankTotal === ledgerTotal) {
+      candidates.push(
+        suggestedGroup(
+          "RF-04",
+          "one-to-many",
+          [statement.id],
+          withinWindow.map((item) => item.id),
+          bankTotal,
+          ledgerTotal,
+          evaluatedAt,
+        ),
+      );
+    }
+  }
+
+  // 2. Many bank statements to One ledger record
+  const statementsByDoc = new Map<string, StatementRecord[]>();
+  for (const statement of statements) {
+    const doc = resolveTransactionDocument(statement.document, statement.history);
+    if (!doc) continue;
+    const list = statementsByDoc.get(doc) ?? [];
+    list.push(statement);
+    statementsByDoc.set(doc, list);
+  }
+
+  for (const ledger of ledgers) {
+    const doc = resolveTransactionDocument(ledger.document, ledger.history);
+    if (!doc) continue;
+    const matchingStatements = statementsByDoc.get(doc) ?? [];
+    if (matchingStatements.length < 2) continue;
+
+    const withinWindow = matchingStatements.filter(
+      (s) => dayDifference(ledger.date, s.date) <= dateToleranceDays,
+    );
+    if (withinWindow.length < 2) continue;
+
+    const ledgerAmount = centsForLedger(ledger, signProfile);
+    const bankTotal = withinWindow.reduce((sum, item) => sum + decimalToCents(item.value), 0n);
+    if (bankTotal === ledgerAmount) {
+      candidates.push(
+        suggestedGroup(
+          "RF-05",
+          "many-to-one",
+          withinWindow.map((item) => item.id),
+          [ledger.id],
+          bankTotal,
+          ledgerAmount,
+          evaluatedAt,
+        ),
+      );
+    }
+  }
+
+  return candidates;
 }
 
 function oneToManyBatchCandidates(
@@ -398,6 +488,7 @@ function projectSuggestedGroup(
 }
 
 function ledgerTransaction(record: LedgerRecord, accountId: string, signProfile: AccountMapping["signProfile"]): ReconciliationTransaction {
+  const documentId = resolveTransactionDocument(record.document, record.history);
   return {
     id: record.id,
     importBatchId: record.sourceId || record.evidence.fileId,
@@ -408,13 +499,14 @@ function ledgerTransaction(record: LedgerRecord, accountId: string, signProfile:
     postingDate: record.date,
     amountCents: decimalToCents(record.value) * signConvention(signProfile).ledgerMovementMultiplier,
     description: record.history,
-    ...(record.document ? { documentId: record.document } : {}),
+    ...(documentId ? { documentId } : {}),
     ledgerCounterpartAccount: record.ledgerAccount,
     evidence: { ...record.evidence },
   };
 }
 
 function statementTransaction(record: StatementRecord, accountId: string): ReconciliationTransaction {
+  const documentId = resolveTransactionDocument(record.document, record.history);
   return {
     id: record.id,
     importBatchId: record.sourceId || record.evidence.fileId,
@@ -425,7 +517,7 @@ function statementTransaction(record: StatementRecord, accountId: string): Recon
     postingDate: record.date,
     amountCents: decimalToCents(record.value),
     description: record.history,
-    ...(record.document ? { documentId: record.document } : {}),
+    ...(documentId ? { documentId } : {}),
     evidence: { ...record.evidence },
   };
 }
@@ -1364,8 +1456,8 @@ export function traceReconciliationCandidate(input: CandidateDiagnosticTraceInpu
     sameAbsAmount = absoluteCents(stmtCents.toString()) === absoluteCents(ldgCents.toString());
     sameSignAfterConvention = (stmtCents >= 0n && ldgCents >= 0n) || (stmtCents < 0n && ldgCents < 0n);
 
-    const stmtNormDoc = normalizeDocumentId(stmt.document || "");
-    const ldgNormDoc = normalizeDocumentId(ldg.document || "");
+    const stmtNormDoc = resolveTransactionDocument(stmt.document, stmt.history);
+    const ldgNormDoc = resolveTransactionDocument(ldg.document, ldg.history);
     const stmtHint = extractFinancialHint(stmt.history, stmtNormDoc);
     const ldgHint = extractFinancialHint(ldg.history, ldgNormDoc);
 

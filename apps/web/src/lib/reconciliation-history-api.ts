@@ -8,15 +8,26 @@ import {
 import type { NextRequest } from "next/server";
 import { requireV2Actor, V2HttpError } from "./v2-auth";
 
+import { getLocalReconciliationRepository } from "./local-store";
+
 type HistoryDependencies = {
   resolveActor(request: NextRequest): Promise<ActorContext>;
   repository: CompletedReconciliationRepository;
   now(): Date;
 };
 
+function getHistoryRepository(): CompletedReconciliationRepository {
+  if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+    return getLocalReconciliationRepository();
+  }
+  return new PrismaCompletedReconciliationRepository(prisma);
+}
+
 const defaultDependencies: HistoryDependencies = {
   resolveActor: requireV2Actor,
-  repository: new PrismaCompletedReconciliationRepository(prisma),
+  get repository() {
+    return getHistoryRepository();
+  },
   now: () => new Date(),
 };
 
@@ -79,6 +90,23 @@ export async function deleteReconciliationHistory(
   if (!record) throw notFound();
   await dependencies.repository.delete(id);
   return noStoreJson({ success: true, id });
+}
+
+export async function updateReconciliationHistory(
+  request: NextRequest,
+  id: string,
+  dependencies: HistoryDependencies = defaultDependencies,
+): Promise<Response> {
+  const actor = await dependencies.resolveActor(request);
+  const record = await dependencies.repository.findById(id, readableCompanyIds(actor), dependencies.now());
+  if (!record) throw notFound();
+  const body = (await request.json()) as { result?: import("@conciliacao/core").ProcessingResult };
+  if (!body.result) {
+    return noStoreJson({ error: { code: "BAD_REQUEST", message: "Resultado não fornecido para atualização." } }, 400);
+  }
+  record.result = body.result;
+  await dependencies.repository.save(record);
+  return noStoreJson({ success: true, record });
 }
 
 export function reconciliationHistoryError(error: unknown): Response {

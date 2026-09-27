@@ -199,6 +199,102 @@ export function normalizeDocumentId(value: unknown): string {
   return raw;
 }
 
+export const NON_DOCUMENT_NUMERIC_CODES = new Set([
+  // Operation codes & small numbers
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+  "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+  "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+  // Common bank compensation codes
+  "001", "033", "33", "104", "237", "341", "389", "422", "748", "756", "077", "77", "260", "336",
+  // Common years
+  "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029", "2030",
+]);
+
+export function isDocumentIdentifier(value: string | undefined): boolean {
+  if (!value) return false;
+  const norm = normalizeDocumentId(value);
+  if (NON_DOCUMENT_NUMERIC_CODES.has(norm)) return false;
+  return /^\d+$/.test(norm) || /^[A-Z]{2,10}[-_\s/]?\d+$/i.test(norm) || /^\d+-[A-Z0-9]+$/i.test(norm);
+}
+
+/**
+ * Universal document number extraction from accounting or banking descriptions.
+ * Handles Brazilian banking standards (Febraban) and ERP formats (Protheus, SAP, etc.).
+ */
+export function extractDocumentNumber(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const raw = String(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+
+  // 1. Explicit Title/Document prefixes (accounting & banking)
+  // e.g. "BAIXA TIT. - 000064833", "BXA. JUROS - 000064833", "TIT. 64833", "TITULO 64833"
+  const titleMatch = /\b(?:BAIXA\s+TIT(?:ULO)?\.?|BXA\.?\s*(?:TIT(?:ULO)?\.?|JUROS|DESC|MULTA|ACRESC)?|TIT\.?|TITULO|TITULOS)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.exec(raw);
+  if (titleMatch && titleMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(titleMatch[1])) {
+    return titleMatch[1];
+  }
+
+  // 2. Invoice / Tax / Commercial Document prefixes
+  // e.g. "NF 12345", "NF-E 00012345", "FATURA 64833", "DUPLICATA 64833", "BOLETO 64833", "CHQ 123456"
+  const docMatch = /\b(?:NF[-–\s]*E?|NOTA\s+FISCAL|FATURA|FAT|DUP|DUPLICATA|CHQ|CHEQUE|BOL|BOLETO|BORDERO|BORD|DOC(?:TO)?|DOCUMENTO)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.exec(raw);
+  if (docMatch && docMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(docMatch[1])) {
+    return docMatch[1];
+  }
+
+  // 3. Payment / Liquidation / Electronic Banking prefixes across ALL Brazilian banks
+  // e.g. "PGTO ITAU 64833", "PAGTO ELETRONICO 64833", "LIQ.TIT.OUTRO BCO 64833", "SISPAG 64833", "PAGFOR 64833", "DEB T COB 64833"
+  const paymentMatch = /\b(?:PGTO|PAGTO|PAGAMENTO|LIQ\.?\s*TIT\.?|LIQUIDACAO|DEB\.?\s*T\.?\s*COB|SISPAG|PAGFOR)\b.*?\b0*([1-9]\d{3,12})\b/i.exec(raw);
+  if (paymentMatch && paymentMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(paymentMatch[1])) {
+    return paymentMatch[1];
+  }
+
+  // 4. Electronic Transfer prefixes (TED, PIX, DOC)
+  const transferMatch = /\b(?:TED|PIX|TRANSF)\b.*?\b0*([1-9]\d{3,12})\b/i.exec(raw);
+  if (transferMatch && transferMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(transferMatch[1])) {
+    return transferMatch[1];
+  }
+
+  // 5. Fallback: Search for an isolated numeric token (4 to 10 digits) that is not a date, CNPJ, or bank code
+  const tokens = raw.split(/[^A-Z0-9]+/).filter((t) => /^\d{4,10}$/.test(t));
+  const candidateTokens = tokens
+    .map((t) => t.replace(/^0+(?=\d)/, ""))
+    .filter((t) => !NON_DOCUMENT_NUMERIC_CODES.has(t) && !isDateLikeNumber(t));
+
+  if (candidateTokens.length === 1) {
+    return candidateTokens[0];
+  }
+
+  return undefined;
+}
+
+function isDateLikeNumber(value: string): boolean {
+  if (value.length === 8) {
+    const yyyy1 = Number(value.slice(0, 4));
+    const yyyy2 = Number(value.slice(4, 8));
+    if ((yyyy1 >= 2020 && yyyy1 <= 2035) || (yyyy2 >= 2020 && yyyy2 <= 2035)) return true;
+  }
+  return false;
+}
+
+export function resolveTransactionDocument(
+  document: string | undefined,
+  history: string | undefined,
+): string | undefined {
+  const rawDoc = (document ?? "").trim();
+  const normDoc = normalizeDocumentId(rawDoc);
+
+  // If rawDoc is valid and not a generic code or small number, use it
+  if (normDoc && !NON_DOCUMENT_NUMERIC_CODES.has(normDoc) && isDocumentIdentifier(normDoc)) {
+    return normDoc;
+  }
+
+  // Otherwise, extract from description/history
+  if (history) {
+    const extracted = extractDocumentNumber(history);
+    if (extracted) return normalizeDocumentId(extracted);
+  }
+
+  return normDoc && !NON_DOCUMENT_NUMERIC_CODES.has(normDoc) ? normDoc : undefined;
+}
+
 export function normalizeDocument(value: unknown): string {
   return normalizeDocumentId(value);
 }
@@ -236,8 +332,24 @@ export function parseDate(value: unknown): string {
     return value.toISOString().slice(0, 10);
   }
   const text = String(value ?? "").trim();
+
+  // Excel serial dates (e.g. 45292 = 2024-01-01)
+  if (typeof value === "number" || (/^\d{5}(?:\.\d+)?$/.test(text) && Number(text) >= 30000 && Number(text) <= 75000)) {
+    const serial = typeof value === "number" ? value : Number(text);
+    const utcDays = Math.floor(serial - 25569);
+    const dateObj = new Date(utcDays * 86400 * 1000);
+    if (!Number.isNaN(dateObj.getTime())) {
+      return dateObj.toISOString().slice(0, 10);
+    }
+  }
+
   let match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
   if (match) return validateDate(`${match[3]}-${match[2]}-${match[1]}`);
+  match = /^(\d{2})\/(\d{2})\/(\d{2})$/.exec(text);
+  if (match) {
+    const year = Number(match[3]) < 70 ? `20${match[3]}` : `19${match[3]}`;
+    return validateDate(`${year}-${match[2]}-${match[1]}`);
+  }
   match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(text);
   if (match) return validateDate(`${match[3]}-${match[2]}-${match[1]}`);
   match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);

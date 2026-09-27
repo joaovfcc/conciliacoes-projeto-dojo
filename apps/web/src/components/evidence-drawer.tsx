@@ -13,9 +13,11 @@ import {
 export function EvidenceDrawer({
   selected,
   onClose,
+  onOpenManualMatch,
 }: {
   selected: ReconciliationResult | null;
   onClose: () => void;
+  onOpenManualMatch?: (item: ReconciliationResult) => void;
 }) {
   if (!selected) return null;
 
@@ -30,7 +32,21 @@ export function EvidenceDrawer({
             <span className="eyebrow">Detalhamento e Evidência</span>
             <h3>{resultStatusLabel(selected.status)}</h3>
           </div>
-          <button type="button" className="close-button" onClick={onClose}>×</button>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            {(selected.status === "AMBIGUOUS_MATCH" || selected.ambiguityGroup) && onOpenManualMatch && (
+              <button
+                type="button"
+                className="button btn-sm"
+                onClick={() => {
+                  onClose();
+                  onOpenManualMatch(selected);
+                }}
+              >
+                Conciliar manual
+              </button>
+            )}
+            <button type="button" className="close-button" onClick={onClose}>×</button>
+          </div>
         </div>
 
         <div className="drawer-body">
@@ -62,7 +78,18 @@ export function EvidenceDrawer({
                 <span className="label">Decisão</span>
                 <strong>{selected.decisionLevel === "AUTOMATIC" ? "Automática (Auditável)" : "Manual / Requer Revisão"}</strong>
               </div>
+              {selected.score !== undefined && selected.rule === "AI-ADVISOR-V1" && (
+                <div>
+                  <span className="label">Confiança da IA</span>
+                  <strong style={{ color: "#2563EB" }}>{(selected.score * 100).toFixed(1)}%</strong>
+                </div>
+              )}
             </div>
+            {selected.rule === "AI-ADVISOR-V1" && (
+              <div style={{ marginTop: "8px", display: "inline-block", padding: "2px 8px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: "4px", fontSize: "11px", fontWeight: 600, color: "#1D4ED8" }}>
+                ✨ Sugestão da IA (Revisão Humana Obrigatória)
+              </div>
+            )}
             {selected.reason && (
               <p style={{ margin: "12px 0 0", fontSize: "12px", color: "var(--muted)" }}>
                 <strong>Justificativa Técnica:</strong> {selected.reason}

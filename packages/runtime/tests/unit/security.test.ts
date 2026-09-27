@@ -6,7 +6,7 @@ import { InMemoryCompletedReconciliationRepository } from "@conciliacao/core";
 import { loadRuntimeConfig } from "../../src/config";
 import { LocalObjectStore } from "../../src/object-store";
 import { MemorySessionStore } from "../../src/session-store";
-import { parseTsv, RuntimeServices, validateOfficeArchive } from "../../src/services";
+import { assertWorkerAvailable, parseTsv, RuntimeServices, validateOfficeArchive } from "../../src/services";
 import type { ReconciliationSession } from "../../src/types";
 
 const temporaryDirectories: string[] = [];
@@ -41,6 +41,30 @@ describe("isolamento de sessões autenticadas", () => {
     await services.sessions.save(session);
     expect(await services.sweep()).toBe(1);
     expect(await services.sessions.get(session.id)).toBeNull();
+  });
+});
+
+describe("disponibilidade do processamento", () => {
+  it("bloqueia imediatamente uma execução quando não há worker conectado", async () => {
+    await expect(assertWorkerAvailable({ getWorkersCount: async () => 0 }))
+      .rejects.toMatchObject({
+        code: "WORKER_INDISPONIVEL",
+        status: 503,
+        retryAfterSeconds: 15,
+      });
+  });
+
+  it("aceita a fila quando ao menos um worker está conectado", async () => {
+    await expect(assertWorkerAvailable({ getWorkersCount: async () => 1 })).resolves.toBeUndefined();
+  });
+
+  it("traduz indisponibilidade do Redis para uma falha pública e recuperável", async () => {
+    await expect(assertWorkerAvailable({ getWorkersCount: async () => { throw new Error("ECONNREFUSED"); } }))
+      .rejects.toMatchObject({
+        code: "PROCESSAMENTO_INDISPONIVEL",
+        status: 503,
+        retryAfterSeconds: 15,
+      });
   });
 });
 

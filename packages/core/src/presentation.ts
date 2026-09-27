@@ -61,6 +61,8 @@ const reconciliationRuleLabels: Record<MatchRule, string> & Record<string, strin
   "RF-07": "RF-07 — total diário exato dos resíduos",
   "RF-08": "RF-08 — compensação bancária líquida zero",
   "RF-09": "RF-09 — pendência após todas as regras",
+  "AI-ADVISOR-V1": "Sugestão da IA — Análise assistida por LLM via n8n",
+  MANUAL: "Manual — conciliação confirmada pelo usuário",
   RULE_7_UNMAPPED_LEDGER: "Regra 7 — lançamento do razão fora do relacionamento confirmado",
   RULE_8_UNMAPPED_STATEMENT: "Regra 8 — lançamento do extrato fora do relacionamento confirmado",
 };

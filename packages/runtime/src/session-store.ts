@@ -75,7 +75,11 @@ export class RedisSessionStore implements SessionStore {
   private readonly redis: Redis;
   constructor(private readonly config: RuntimeConfig) {
     if (!config.redisUrl) throw new Error("REDIS_URL é obrigatório.");
-    this.redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
+    this.redis = new Redis(config.redisUrl, {
+      connectTimeout: 5_000,
+      commandTimeout: 5_000,
+      maxRetriesPerRequest: 1,
+    });
   }
   async create(clientKey: string, actorId: string, organizationId: string, companyId: string): Promise<CreateSessionResult> {
     const token = randomBytes(32).toString("base64url"); const now = new Date();

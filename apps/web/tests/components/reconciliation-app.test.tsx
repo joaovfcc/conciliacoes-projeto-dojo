@@ -91,10 +91,13 @@ describe("ReconciliationApp", () => {
     expect(authenticatedFetch).toHaveBeenCalledWith("/api/sessions/session-1/preflight", expect.objectContaining({
       headers: { "X-Reconciliation-Session-Token": "token-1" },
     }));
-    expect(screen.getByRole("tab", { name: "Proximidade" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Grupos" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Total diário" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Compensados" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Conciliados/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Extrato sem razão/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Razão sem extrato/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Ambiguidades/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Aplicações automáticas/ })).toBeInTheDocument();
+    expect(screen.getAllByText("Linhas do Extrato")[0]).toBeInTheDocument();
+    expect(screen.getAllByText("Linhas do Razão")[0]).toBeInTheDocument();
     expect(screen.getByText("Movimentação do banco (líquida)")).toBeInTheDocument();
     expect(screen.getByText("Cobertura confirmada")).toBeInTheDocument();
     expect(screen.getByText("Cobertura potencial")).toBeInTheDocument();
@@ -102,29 +105,40 @@ describe("ReconciliationApp", () => {
     expect(screen.getByText("Ambiguidades por valor")).toBeInTheDocument();
     expect(screen.getByText("Cobertura do razão")).toBeInTheDocument();
     expect(screen.getByText("Cobertura do extrato operacional")).toBeInTheDocument();
-    for (const [tab, status] of [
-      ["Proximidade", "Conciliação com tolerância de data"],
-      ["Grupos", "Conciliação em grupo"],
-      ["Total diário", "Conciliação por total diário"],
-      ["Compensados", "Compensado no extrato"],
-      ["Aplicações automáticas", "Excluído - aplicação automática"],
-      ["Razão sem extrato", "Lançamento do razão sem correspondente no extrato"],
-      ["Extrato sem razão", "Lançamento do extrato sem correspondente no razão"],
-    ]) {
-      fireEvent.click(screen.getByRole("tab", { name: tab }));
-      expect(await screen.findByText(status)).toBeInTheDocument();
-      if (tab === "Grupos") {
-        expect(screen.getByText(/Principal do grupo/)).toBeInTheDocument();
-        expect(screen.getByText(/Juros do grupo/)).toBeInTheDocument();
-      }
-      if (tab === "Total diário") expect(screen.getByText(/não representa pareamento individual/)).toBeInTheDocument();
-    }
-    fireEvent.click(screen.getByRole("tab", { name: "Automáticos" }));
+
+    // Testa os subfiltros de Conciliados
+    fireEvent.click(screen.getByRole("button", { name: /Lotes \/ Desdobros/ }));
+    expect(await screen.findByText("Conciliação em grupo")).toBeInTheDocument();
+    expect(screen.getByText(/Principal do grupo/)).toBeInTheDocument();
+    expect(screen.getByText(/Juros do grupo/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Por Data/ }));
+    expect(await screen.findByText("Conciliação com tolerância de data")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Total Diário/ }));
+    expect(await screen.findByText("Conciliação por total diário")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Compensados/ }));
+    expect(await screen.findByText("Compensado no extrato")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Exatos 1:1/ }));
     expect(screen.getByText("Regra 1 — documento, data e valor exatos")).toBeInTheDocument();
     expect(screen.queryByText("AUTO_MATCH_EXACT")).not.toBeInTheDocument();
     expect(screen.queryByText("RULE_1_EXACT")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Ver evidência" }));
+    // Testa as outras abas principais
+    fireEvent.click(screen.getByRole("tab", { name: /Aplicações automáticas/ }));
+    expect(await screen.findByText("Excluído - aplicação automática")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Razão sem extrato/ }));
+    expect(await screen.findByText("Lançamento do razão sem correspondente no extrato")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Extrato sem razão/ }));
+    expect(await screen.findByText("Lançamento do extrato sem correspondente no razão")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Conciliados/ }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Ver evidência" })[0]!);
     const evidence = await screen.findByRole("region", { name: "Evidência da conciliação REC-1" });
     expect(evidence).toHaveFocus();
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
@@ -192,6 +206,183 @@ describe("ReconciliationApp", () => {
     await waitFor(() => {
       expect(authenticatedFetch).toHaveBeenCalledWith("/api/reconciliation-history/h1", expect.objectContaining({ method: "DELETE" }));
     });
+  });
+
+  it("permite conciliar manualmente lançamentos da aba de ambiguidades e transferi-los para conciliados", async () => {
+    const l1 = {
+      id: "l1",
+      company: "EMPRESA",
+      branch: "01",
+      ledgerAccount: "111",
+      date: "2026-01-05",
+      document: "DOC-A",
+      history: "Nota A",
+      value: "50.00",
+      sourceId: "l1",
+      evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR" as const, line: 2 },
+    };
+    const l2 = {
+      id: "l2",
+      company: "EMPRESA",
+      branch: "01",
+      ledgerAccount: "111",
+      date: "2026-01-06",
+      document: "DOC-B",
+      history: "Nota B",
+      value: "50.00",
+      sourceId: "l2",
+      evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR" as const, line: 3 },
+    };
+    const s1 = {
+      id: "s1",
+      bank: "ITAU",
+      agency: "0191",
+      bankAccount: "26775-6",
+      date: "2026-01-05",
+      document: "DOC-EXT-1",
+      history: "Depósito 1",
+      value: "50.00",
+      sourceId: "s1",
+      evidence: { fileId: "statement", originalName: "itau.xlsx", extractionMethod: "TABULAR" as const, line: 2, parser: "itau-checking-xlsx-v1" },
+    };
+
+    const ambiguityGroup = {
+      id: "GRP-1",
+      ledgerAccount: "111",
+      amount: "50.00",
+      ledgerCandidateIds: ["l1", "l2"],
+      statementCandidateIds: ["s1"],
+      reason: "Há 2 lançamentos no razão e 1 no extrato com o mesmo valor.",
+      evaluatedAt: "2026-01-31T12:00:00.000Z",
+    };
+
+    const ambiguousResult = {
+      id: "AMB-1",
+      status: "AMBIGUOUS_MATCH" as const,
+      rule: "RF-02",
+      decisionLevel: "REVIEW_REQUIRED" as const,
+      reason: "Ambiguidade detectada.",
+      ledger: l1,
+      ledgers: [l1, l2],
+      statements: [s1],
+      ambiguityGroup,
+      valueTolerance: "0.00",
+    };
+
+    const result = {
+      company: "EMPRESA",
+      branch: "01",
+      period: "202601",
+      executedAt: "2026-01-31T12:00:00.000Z",
+      summaries: [],
+      results: [ambiguousResult],
+      issues: [],
+      files: [{ fileId: "statement", originalName: "itau.xlsx", bank: "ITAU", agency: "0191", account: "26775-6", periods: ["202601"], recordCount: 1, extractionMethod: "TABULAR" as const, parser: "itau-checking-xlsx-v1", classification: "CURRENT_ACCOUNT" as const, reconciliationEligible: true }],
+      investments: [],
+      controls: {
+        tolerance: "0.05",
+        signProfiles: ["BANK_ASSET" as const],
+        movements: { bankConciliable: "50.00", ledger: "100.00", difference: "-50.00", status: "FAILED" as const },
+        balances: { openingStatus: "NOT_AVAILABLE" as const, closingStatus: "NOT_AVAILABLE" as const },
+        coverage: { lines: { covered: "0", total: "3", percentage: "0.00" }, absoluteValue: { covered: "0.00", total: "150.00", percentage: "0.00" } },
+        countsByStatus: [{ status: "AMBIGUOUS_MATCH" as const, count: "1" }],
+        pendingByDate: [],
+      },
+    };
+
+    const authenticatedFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/api/reconciliation-history/h1") && init?.method === "PATCH") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.includes("/api/reconciliation-history/h1")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ record: { result } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "h1",
+                companyId: "company-1",
+                companyName: "Empresa",
+                period: "202601",
+                status: "COMPLETED",
+                completedAt: "2026-01-31T12:00:00.000Z",
+                expiresAt: "2027-01-31T12:00:00.000Z",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+
+    renderApp(authenticatedFetch);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ver resultado" }));
+
+    // Verifica que na aba Ambiguidades consta badge 1
+    const ambiguityTab = await screen.findByRole("tab", { name: /Ambiguidades/ });
+    expect(ambiguityTab).toBeInTheDocument();
+    expect(ambiguityTab).toHaveTextContent("1");
+
+    fireEvent.click(ambiguityTab);
+
+    // Clica no botão "Conciliar manual"
+    const manualMatchBtn = await screen.findByRole("button", { name: "Conciliar manual" });
+    expect(manualMatchBtn).toBeInTheDocument();
+    fireEvent.click(manualMatchBtn);
+
+    // Modal aberto
+    expect(screen.getByText("Conciliação Manual de Ambiguidade")).toBeInTheDocument();
+    expect(screen.getByText(/Valor de referência: R\$\s*50,00/)).toBeInTheDocument();
+
+    // Seleciona a Nota A no razão
+    const radioL1 = screen.getByDisplayValue("l1");
+    fireEvent.click(radioL1);
+
+    // Confere que extrato s1 já está selecionado por ser o único ou clica nele
+    const radioS1 = screen.getByDisplayValue("s1");
+    fireEvent.click(radioS1);
+
+    expect(screen.getByText("✓ Par selecionado para conciliação")).toBeInTheDocument();
+    expect(screen.getByText(/Diferença: R\$\s*0,00 \(Exato\)/)).toBeInTheDocument();
+
+    // Confirma conciliação manual
+    const confirmBtn = screen.getByRole("button", { name: "Confirmar conciliação manual" });
+    expect(confirmBtn).not.toBeDisabled();
+    fireEvent.click(confirmBtn);
+
+    // Modal fechou
+    expect(screen.queryByText("Conciliação Manual de Ambiguidade")).not.toBeInTheDocument();
+
+    // Ambiguidades zera (badge 0)
+    expect(screen.getByRole("tab", { name: /Ambiguidades/ })).toHaveTextContent("0");
+
+    // Conciliados agora tem 1 (badge 1)
+    const reconciledTab = screen.getByRole("tab", { name: /Conciliados/ });
+    expect(reconciledTab).toHaveTextContent("1");
+
+    // Razão sem extrato recebeu o resíduo (badge 1)
+    const ledgerWithoutStmtTab = screen.getByRole("tab", { name: /Razão sem extrato/ });
+    expect(ledgerWithoutStmtTab).toHaveTextContent("1");
+
+    // Abre a aba Conciliados e verifica que a regra é Manual
+    fireEvent.click(reconciledTab);
+    expect(screen.getByText(/Manual/)).toBeInTheDocument();
   });
 });
 

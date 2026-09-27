@@ -54,3 +54,25 @@ export class RedisRateLimiter implements RateLimiter {
     return createHmac("sha256", this.keySecret).update(value).digest("hex");
   }
 }
+
+export class MemoryRateLimiter implements RateLimiter {
+  private readonly hits = new Map<string, number[]>();
+
+  async consume(policy: RateLimitPolicy, rawKey: string): Promise<RateLimitResult> {
+    const now = Date.now();
+    const windowStart = now - policy.windowMs;
+    const history = (this.hits.get(rawKey) ?? []).filter((timestamp) => timestamp > windowStart);
+    history.push(now);
+    this.hits.set(rawKey, history);
+    return {
+      allowed: history.length <= policy.limit,
+      remaining: Math.max(0, policy.limit - history.length),
+      retryAfterSeconds: 1,
+    };
+  }
+
+  async close(): Promise<void> {
+    this.hits.clear();
+  }
+}
+

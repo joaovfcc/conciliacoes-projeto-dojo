@@ -2,10 +2,20 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@conciliacao/core";
 import { authService } from "@/lib/auth-runtime";
 import { verifyAccessToken } from "@/lib/auth-jwt";
+import { deleteLocalCompany, getLocalDb } from "@/lib/local-store";
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { id: companyId } = await context.params;
+
+    if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+      const body = (await request.json()) as { name?: string; documentNumber?: string };
+      const db = getLocalDb();
+      if (body.name?.trim()) {
+        db.prepare("UPDATE companies SET name = ? WHERE id = ?").run(body.name.trim(), companyId);
+      }
+      return NextResponse.json({ company: { id: companyId, name: body.name } });
+    }
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Token não informado" } }, { status: 401 });
@@ -56,6 +66,12 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
 export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { id: companyId } = await context.params;
+
+    if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+      deleteLocalCompany(companyId);
+      return NextResponse.json({ success: true, mode: "DEACTIVATED" });
+    }
+
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Token não informado" } }, { status: 401 });

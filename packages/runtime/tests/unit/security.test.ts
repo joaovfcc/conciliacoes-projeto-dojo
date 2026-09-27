@@ -6,7 +6,7 @@ import { InMemoryCompletedReconciliationRepository } from "@conciliacao/core";
 import { loadRuntimeConfig } from "../../src/config";
 import { LocalObjectStore } from "../../src/object-store";
 import { MemorySessionStore } from "../../src/session-store";
-import { parseTsv, RuntimeServices, validateOfficeArchive } from "../../src/services";
+import { assertWorkerAvailable, parseTsv, RuntimeServices, validateOfficeArchive } from "../../src/services";
 import type { ReconciliationSession } from "../../src/types";
 
 const temporaryDirectories: string[] = [];
@@ -41,6 +41,30 @@ describe("isolamento de sessões autenticadas", () => {
     await services.sessions.save(session);
     expect(await services.sweep()).toBe(1);
     expect(await services.sessions.get(session.id)).toBeNull();
+  });
+});
+
+describe("disponibilidade do processamento", () => {
+  it("bloqueia imediatamente uma execução quando não há worker conectado", async () => {
+    await expect(assertWorkerAvailable({ getWorkersCount: async () => 0 }))
+      .rejects.toMatchObject({
+        code: "WORKER_INDISPONIVEL",
+        status: 503,
+        retryAfterSeconds: 15,
+      });
+  });
+
+  it("aceita a fila quando ao menos um worker está conectado", async () => {
+    await expect(assertWorkerAvailable({ getWorkersCount: async () => 1 })).resolves.toBeUndefined();
+  });
+
+  it("traduz indisponibilidade do Redis para uma falha pública e recuperável", async () => {
+    await expect(assertWorkerAvailable({ getWorkersCount: async () => { throw new Error("ECONNREFUSED"); } }))
+      .rejects.toMatchObject({
+        code: "PROCESSAMENTO_INDISPONIVEL",
+        status: 503,
+        retryAfterSeconds: 15,
+      });
   });
 });
 
@@ -129,6 +153,21 @@ describe("integração do motor PRD no runtime", () => {
     })).rejects.toMatchObject({ code: "TOLERANCIA_DATA_INVALIDA" });
   });
 
+  it("não aceita uma declaração de escopo lógico que não reproduz a identidade do extrato", async () => {
+    const services = await runtime();
+    const session = {
+      id: "runtime-invalid-linked-account", tokenHash: "hash", clientKey: "client", actorId: "user", organizationId: "org", companyId: "company", createdAt: "2026-01-31T00:00:00.000Z", expiresAt: "2026-02-01T00:00:00.000Z", lastHeartbeatAt: "2026-01-31T00:00:00.000Z", status: "AWAITING_CONFIRMATION", progress: 35, progressMessage: "", files: [], closed: false,
+      ledgers: [], statements: [],
+      preflight: { companies: ["EMPRESA"], branches: ["01"], detectedPeriods: [{ period: "202601", recordCount: 2 }], ledgerAccounts: [{ account: "111", company: "EMPRESA", branch: "01", bank: "ITAU", agency: "1", bankAccount: "999", recordCount: 1 }], statements: [{ fileId: "statement", originalName: "extrato.xlsx", bank: "ITAU", agency: "1", account: "2", periods: ["202601"], recordCount: 1, extractionMethod: "TABULAR", parser: "TEST", classification: "CURRENT_ACCOUNT", reconciliationEligible: true }], investments: [], issues: [], requiresUserInput: false },
+    } as ReconciliationSession;
+
+    await expect(services.process(session, {
+      company: "EMPRESA", period: "202601", valueTolerance: "0.00", dateToleranceDays: 0,
+      mappings: [{ ledgerAccount: "111", statementFileIds: ["statement"], signProfile: "BANK_ASSET", linkedPhysicalAccounts: [{ statementFileId: "statement", bank: "ITAU", agency: "1", account: "3", role: "LINKED" }] }],
+      idempotencyKey: "invalid-linked-account",
+    })).rejects.toMatchObject({ code: "BANK_ACCOUNT_MISMATCH" });
+  });
+
   it("persiste progresso por regras e controles wire-safe no resultado", async () => {
     const services = await runtime();
     const saves: string[] = [];
@@ -136,7 +175,7 @@ describe("integração do motor PRD no runtime", () => {
     services.sessions.save = async (current) => { saves.push(current.progressMessage); await originalSave(current); };
     const originalComplete = services.sessions.complete.bind(services.sessions);
     services.sessions.complete = async (current) => { saves.push(current.progressMessage); return originalComplete(current); };
-    const confirmation = { company: "EMPRESA", branch: "01", period: "202601", valueTolerance: "0.00", dateToleranceDays: 0, mappings: [{ ledgerAccount: "111", statementFileIds: ["statement"], signProfile: "BANK_ASSET" as const }], idempotencyKey: "runtime-process", evaluatedAt: "2026-01-31T00:00:00.000Z" };
+    const confirmation = { company: "EMPRESA", branch: "01", period: "202601", valueTolerance: "0.00", dateToleranceDays: 0, mappings: [{ ledgerAccount: "111", statementFileIds: ["statement"], signProfile: "BANK_ASSET" as const, linkedPhysicalAccounts: [{ statementFileId: "statement", bank: "ITAU", agency: "1", account: "2", role: "LINKED" as const }] }], idempotencyKey: "runtime-process", evaluatedAt: "2026-01-31T00:00:00.000Z" };
     const session = {
       id: "runtime-process", tokenHash: "hash", clientKey: "client", actorId: "user", organizationId: "org", companyId: "company", createdAt: confirmation.evaluatedAt, expiresAt: "2026-02-01T00:00:00.000Z", lastHeartbeatAt: confirmation.evaluatedAt, status: "AWAITING_CONFIRMATION", progress: 35, progressMessage: "", files: [
         { id: "ledger", kind: "LEDGER", originalName: "razao.xlsx", contentType: "application/octet-stream", size: 1, objectKey: "private/ledger", sha256: "ledger-hash" },
@@ -144,7 +183,7 @@ describe("integração do motor PRD no runtime", () => {
       ], closed: false,
       ledgers: [{ id: "l1", company: "EMPRESA", branch: "01", ledgerAccount: "111", date: "2026-01-02", document: "", history: "PAGAMENTO", value: "10.00", sourceId: "l1", evidence: { fileId: "ledger", originalName: "razao.xlsx", extractionMethod: "TABULAR", line: 2 } }],
       statements: [{ id: "s1", bank: "ITAU", agency: "1", bankAccount: "2", date: "2026-01-02", document: "", history: "PAGAMENTO", value: "-10.00", sourceId: "s1", evidence: { fileId: "statement", originalName: "extrato.xlsx", extractionMethod: "TABULAR", line: 2 } }],
-      preflight: { companies: ["EMPRESA"], branches: ["01"], detectedPeriods: [{ period: "202601", recordCount: 2 }], ledgerAccounts: [{ account: "111", company: "EMPRESA", branch: "01", bank: "ITAU", agency: "1", bankAccount: "2", recordCount: 1 }], statements: [{ fileId: "statement", originalName: "extrato.xlsx", bank: "ITAU", agency: "1", account: "2", periods: ["202601"], recordCount: 1, extractionMethod: "TABULAR", parser: "TEST", classification: "CURRENT_ACCOUNT", reconciliationEligible: true }], investments: [], issues: [], requiresUserInput: false },
+      preflight: { companies: ["EMPRESA"], branches: ["01"], detectedPeriods: [{ period: "202601", recordCount: 2 }], ledgerAccounts: [{ account: "111", company: "EMPRESA", branch: "01", bank: "ITAU", agency: "1", bankAccount: "999", recordCount: 1 }], statements: [{ fileId: "statement", originalName: "extrato.xlsx", bank: "ITAU", agency: "1", account: "2", periods: ["202601"], recordCount: 1, extractionMethod: "TABULAR", parser: "TEST", classification: "CURRENT_ACCOUNT", reconciliationEligible: true }], investments: [], issues: [], requiresUserInput: false },
     } as ReconciliationSession;
     await services.sessions.save(session);
 

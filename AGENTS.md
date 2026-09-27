@@ -39,6 +39,26 @@ Guidance for AI Coding Agents when working with code in this repository.
 - Zero context switching required from the user
 - Go fix failing tests without being told how
 
+### 6. Autonomous Skill Routing
+
+- Before starting any technical task, and before writing code or planning the implementation, consult `AVAILABLE_SKILLS_INDEX.md` at the repository root to identify contextually relevant skills.
+
+- Use `AVAILABLE_SKILLS_INDEX.md` as a routing catalog, not as permanent task context. Do not load every skill automatically.
+
+- If a skill trigger clearly matches the current task, you MUST use `view_file` to read the referenced `SKILL.md` before proceeding.
+
+- If multiple skills seem applicable, choose the most specific skill first. Use additional skills only when they add clear value to the task.
+
+- If the task context changes significantly during execution, re-check `AVAILABLE_SKILLS_INDEX.md` before continuing.
+
+- Before executing any implementation or code modification, create an `implementation_plan` and present it for user approval.
+
+- Do not implement code, modify files, run destructive commands, or change architecture before the user approves the `implementation_plan`.
+
+- You are only exempt from reading the `SKILL.md` directly if you are explicitly delegating the task to a subagent and instructing that subagent to read and follow the relevant skill first.
+
+- If no skill is suitable, follow the general rules in this `AGENTS.md`.
+
 ## Core Principles
 
 - **Simplicity First**: Make every change as simple as possible. Minimal code impact.
@@ -134,3 +154,4 @@ Always use the Nx generator (`nx g @tech-leads-club/skill-plugin:skill`) to crea
 ## Release
 
 Nx Release with conventional commits. `chore`, `test`, `style`, `build`, `ci` prefixes do not trigger version bumps. Security scan must pass before release (`npm run scan`). Two independent release groups: `cli` and `skills-catalog`.
+

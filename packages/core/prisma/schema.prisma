@@ -146,6 +146,7 @@ model Company {
 
   bankAccounts           BankAccount[]
   ledgerAccounts         LedgerAccount[]
+  bankLedgerMappings     BankLedgerMapping[]
   reconciliationProfiles ReconciliationProfile[]
   dataSources            DataSource[]
   importBatches          ImportBatch[]
@@ -262,6 +263,7 @@ model BankAccount {
 
   company                Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
   reconciliationProfiles ReconciliationProfile[]
+  ledgerMappings         BankLedgerMapping[]
   layoutBindings          AccountLayoutBinding[]
   importBatches           ImportBatch[]
   transactions            NormalizedTransaction[]
@@ -281,11 +283,31 @@ model LedgerAccount {
   updatedAt    DateTime     @updatedAt
 
   company      Company                              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  bankMappings BankLedgerMapping[]
   profileLinks ReconciliationProfileLedgerAccount[]
   entries      NormalizedLedgerEntry[]
 
   @@unique([companyId, code])
   @@index([companyId, status])
+}
+
+model BankLedgerMapping {
+  id              String       @id @default(uuid())
+  companyId       String
+  bankAccountId   String
+  ledgerAccountId String
+  status          ActiveStatus @default(ACTIVE)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  bankAccount   BankAccount   @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  ledgerAccount LedgerAccount @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([bankAccountId, ledgerAccountId])
+  @@index([companyId, status])
+  @@index([bankAccountId, status])
+  @@index([ledgerAccountId, status])
 }
 
 model ReconciliationProfile {

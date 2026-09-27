@@ -23,11 +23,22 @@ export type RuntimeConfig = {
   pdftoppmCommand: string;
   tesseractCommand: string;
   ocrLanguage: string;
+  llmMatchAdvisorMode: "DISABLED" | "SHADOW" | "REVIEW";
+  llmMatchAdvisorUrl?: string;
+  llmMatchAdvisorSecret?: string;
+  llmMatchAdvisorTimeoutMs: number;
+  llmMatchMaxGroupsPerRequest: number;
+  llmMatchMaxCandidatesPerGroup: number;
+  llmMatchPromptVersion: string;
 };
 
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const ocrLanguage = env.PDF_OCR_LANGUAGE || "por";
   if (!ocrLanguage.split("+").includes("por")) throw new Error("PDF_OCR_LANGUAGE deve incluir o idioma português (por).");
+  const rawAdvisorMode = (env.LLM_MATCH_ADVISOR_MODE || "DISABLED").trim().toUpperCase();
+  const llmMatchAdvisorMode: "DISABLED" | "SHADOW" | "REVIEW" =
+    rawAdvisorMode === "SHADOW" ? "SHADOW" : rawAdvisorMode === "REVIEW" ? "REVIEW" : "DISABLED";
+
   const config: RuntimeConfig = {
     sessionTtlSeconds: positiveInt(env.SESSION_TTL_SECONDS, 7200),
     heartbeatGraceSeconds: positiveInt(env.HEARTBEAT_GRACE_SECONDS, 300),
@@ -47,6 +58,11 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     pdftoppmCommand: env.PDF_RENDER_COMMAND || "pdftoppm",
     tesseractCommand: env.PDF_OCR_COMMAND || "tesseract",
     ocrLanguage,
+    llmMatchAdvisorMode,
+    llmMatchAdvisorTimeoutMs: positiveInt(env.LLM_MATCH_ADVISOR_TIMEOUT_MS, 15000),
+    llmMatchMaxGroupsPerRequest: positiveInt(env.LLM_MATCH_MAX_GROUPS_PER_REQUEST, 20),
+    llmMatchMaxCandidatesPerGroup: positiveInt(env.LLM_MATCH_MAX_CANDIDATES_PER_GROUP, 20),
+    llmMatchPromptVersion: env.LLM_MATCH_PROMPT_VERSION || "match-advisor-v1",
   };
   assignOptional(config, "redisUrl", env.REDIS_URL);
   assignOptional(config, "s3Bucket", env.S3_BUCKET);
@@ -54,6 +70,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   assignOptional(config, "s3Endpoint", env.S3_ENDPOINT);
   assignOptional(config, "s3AccessKeyId", env.S3_ACCESS_KEY_ID);
   assignOptional(config, "s3SecretAccessKey", env.S3_SECRET_ACCESS_KEY);
+  assignOptional(config, "llmMatchAdvisorUrl", env.LLM_MATCH_ADVISOR_URL);
+  assignOptional(config, "llmMatchAdvisorSecret", env.LLM_MATCH_ADVISOR_SECRET);
   return config;
 }
 

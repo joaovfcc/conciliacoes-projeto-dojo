@@ -49,18 +49,105 @@ describe("fachada de reconciliação", () => {
     expect(output.results.some((item) => item.status.startsWith("AUTO_MATCH"))).toBe(false);
   });
 
-  it("projeta grupos automáticos e auditoria sem perder os campos públicos antigos", () => {
+  it("concilia valor único dentro da competência mesmo quando as datas são diferentes", () => {
     const output = reconcile(
-      [ledger({ id: "l1", value: "60.00" }), ledger({ id: "l2", value: "40.00", evidence: { ...evidence, line: 8 } })],
-      [statement({ value: "-100.00" })],
+      [ledger({ id: "l-valor-unico", date: "2026-01-01" })],
+      [statement({ id: "s-valor-unico", date: "2026-01-31" })],
       confirmation,
     );
-    const result = output.results.find((item) => item.status === "AUTO_MATCH_GROUP");
 
-    expect(result).toMatchObject({ decisionLevel: "AUTOMATIC", valueTolerance: "0.00", ruleVersion: "1.0" });
+    expect(output.results).toContainEqual(expect.objectContaining({
+      status: "AUTO_MATCH_UNIQUE_VALUE",
+      ledger: expect.objectContaining({ id: "l-valor-unico" }),
+      statement: expect.objectContaining({ id: "s-valor-unico" }),
+    }));
+    expect(output.controls.coverage.overallOperational).toMatchObject({
+      lines: { covered: "2", total: "2", pending: "0", percentage: "100.00" },
+      absoluteValue: { covered: "200.00", total: "200.00", pending: "0.00", percentage: "100.00" },
+    });
+  });
+
+  it("mantém valores repetidos como ambiguidade, sem escolher pares automaticamente", () => {
+    const output = reconcile(
+      [
+        ledger({ id: "l-duplicado-1", value: "100.00", history: "BAIXA TIT. A" }),
+        ledger({ id: "l-duplicado-2", value: "100.00", history: "BAIXA TIT. B", evidence: { ...evidence, line: 8 } }),
+      ],
+      [
+        statement({ id: "s-duplicado-1", value: "-100.00", history: "PAGAMENTO A" }),
+        statement({ id: "s-duplicado-2", value: "-100.00", history: "PAGAMENTO B", evidence: { ...evidence, fileId: "statement-file", page: 4 } }),
+      ],
+      confirmation,
+    );
+
+    expect(output.results).toHaveLength(4);
+    expect(output.results.every((item) => item.status === "AMBIGUOUS_MATCH")).toBe(true);
+    expect(new Set(output.results.map((item) => item.ambiguityGroup?.id)).size).toBe(1);
+    expect(output.results[0]?.ambiguityGroup).toMatchObject({
+      ledgerCandidateIds: ["l-duplicado-1", "l-duplicado-2"],
+      statementCandidateIds: ["s-duplicado-1", "s-duplicado-2"],
+    });
+    expect(output.results.filter((item) => item.ledger).every((item) => item.candidates?.map((candidate) => candidate.id).join(",") === "s-duplicado-1,s-duplicado-2")).toBe(true);
+    expect(output.summaries[0]?.reconciledCount).toBe(0);
+    expect(output.controls.countsByStatus).toContainEqual({ status: "AMBIGUOUS_MATCH", count: "4" });
+  });
+
+  it("sugere grupos determinísticos sem incluí-los nos totais automáticos", () => {
+    const output = reconcile(
+      [
+        ledger({ id: "l1", value: "60.00", history: "BAIXA TIT. fornecedor A" }),
+        ledger({ id: "l2", value: "40.00", history: "BAIXA TIT. fornecedor B", evidence: { ...evidence, line: 8 } }),
+      ],
+      [statement({ value: "-100.00", history: "PAGAMENTO FORNECEDORES" })],
+      confirmation,
+    );
+    const result = output.results.find((item) => item.status === "GROUP_SUGGESTION");
+
+    expect(result).toMatchObject({ decisionLevel: "REVIEW_REQUIRED", valueTolerance: "0.00", ruleVersion: "1.0" });
     expect(result?.ledgers?.map((item) => item.id)).toEqual(["l1", "l2"]);
     expect(result?.statement?.id).toBe("s1");
-    expect(result?.audit?.differenceCents).toBe("0");
+    expect(result?.matchGroup?.differenceCents).toBe("0");
+    expect(output.summaries[0]?.reconciledCount).toBe(0);
+    expect(output.results.map((item) => item.status)).toEqual(["GROUP_SUGGESTION"]);
+    expect(output.controls.coverage.suggested?.overallOperational.lines).toMatchObject({
+      covered: "3",
+      total: "3",
+      percentage: "100.00",
+    });
+    expect(output.controls.coverage.potential?.overallOperational.lines).toMatchObject({
+      covered: "3",
+      total: "3",
+      pending: "0",
+      percentage: "100.00",
+    });
+    expect(output.controls.pendingByDate).toEqual([]);
+    expect(output.results.some((item) => item.status === "AUTO_MATCH_GROUP" || item.status === "AUTO_MATCH_DAILY_TOTAL")).toBe(false);
+  });
+
+  it("sugere um pagamento Protheus consolidado em 45 baixas, sem conciliá-lo automaticamente", () => {
+    const payments = Array.from({ length: 45 }, (_, index) => ledger({
+      id: `baixa-${index + 1}`,
+      value: index === 44 ? "2.00" : "1.00",
+      history: "BAIXA TIT. lote de pagamento",
+      evidence: { ...evidence, line: index + 11 },
+    }));
+    const output = reconcile(
+      payments,
+      [statement({ id: "pagamento-consolidado", value: "-46.00", history: "PAGAMENTO FUNCIONARIOS" })],
+      confirmation,
+    );
+
+    const suggestion = output.results.find((item) => item.status === "GROUP_SUGGESTION");
+    expect(suggestion?.matchGroup).toMatchObject({ type: "one-to-many", status: "suggested", bankTotalCents: "-4600", ledgerTotalCents: "-4600" });
+    expect(suggestion?.ledgers).toHaveLength(45);
+    expect(output.summaries[0]?.reconciledCount).toBe(0);
+    expect(output.summaries[0]?.suggestedGroupCount).toBe(1);
+    expect(output.summaries[0]?.suggestedLedgerCount).toBe(45);
+    expect(output.summaries[0]?.suggestedStatementCount).toBe(1);
+    expect(output.results).toHaveLength(1);
+    expect(output.controls.coverage.lines.covered).toBe("0");
+    expect(output.controls.coverage.suggested?.overallOperational.lines.covered).toBe("46");
+    expect(output.controls.coverage.potential?.overallOperational.lines.percentage).toBe("100.00");
   });
 
   it("deriva sourceRow de line, page e fallback estável", () => {
@@ -105,12 +192,23 @@ describe("fachada de reconciliação", () => {
     );
 
     expect(output.results[0]?.status).toBe("AUTO_MATCH_EXACT");
-    expect(output.controls).toEqual({
+    expect(output.controls).toMatchObject({
       tolerance: "0.05",
       signProfiles: ["BANK_ASSET"],
       movements: { bankConciliable: "-100.00", ledger: "-100.00", difference: "0.00", status: "PASSED" },
       balances: { bankOpening: "500.00", ledgerOpening: "500.00", openingDifference: "0.00", openingStatus: "PASSED", bankClosing: "400.00", ledgerClosing: "400.00", closingDifference: "0.00", closingStatus: "PASSED" },
-      coverage: { lines: { covered: "1", total: "1", percentage: "100.00" }, absoluteValue: { covered: "100.00", total: "100.00", percentage: "100.00" } },
+      coverage: {
+        lines: { covered: "2", total: "2", percentage: "100.00" },
+        absoluteValue: { covered: "200.00", total: "200.00", percentage: "100.00" },
+        ledger: {
+          lines: { covered: "1", total: "1", percentage: "100.00" },
+          absoluteValue: { covered: "100.00", total: "100.00", percentage: "100.00" },
+        },
+        statementOperational: {
+          lines: { covered: "1", total: "1", percentage: "100.00" },
+          absoluteValue: { covered: "100.00", total: "100.00", percentage: "100.00" },
+        },
+      },
       countsByStatus: [{ status: "AUTO_MATCH_EXACT", count: "1" }],
       pendingByDate: [],
     });
@@ -154,7 +252,7 @@ describe("fachada de reconciliação", () => {
     );
 
     expect(output.results).toContainEqual(expect.objectContaining({ status: "BANK_NET_ZERO" }));
-    expect(output.controls?.coverage).toEqual({
+    expect(output.controls?.coverage).toMatchObject({
       lines: { covered: "0", total: "2", percentage: "0.00" },
       absoluteValue: { covered: "0.00", total: "100.00", percentage: "0.00" },
     });
@@ -183,7 +281,7 @@ describe("fachada de reconciliação", () => {
     });
   });
 
-  it("soma métricas de âncoras repetidas entre partições", () => {
+  it("não procura combinações de grupo entre partições no fluxo automático", () => {
     const output = reconcile(
       [ledger({ value: "100.00" })],
       [
@@ -201,8 +299,8 @@ describe("fachada de reconciliação", () => {
       },
     );
 
-    expect(output.reconciliation?.metrics.combinationsEvaluated).toBe(2);
-    expect(output.reconciliation?.metrics.combinationsEvaluatedByAnchor.l1).toBe(2);
+    expect(output.reconciliation?.metrics.combinationsEvaluated).toBe(0);
+    expect(output.reconciliation?.metrics.combinationsEvaluatedByAnchor.l1).toBeUndefined();
     expect(output.reconciliation?.transactions.filter((transaction) => transaction.id === "l1")).toHaveLength(1);
     const groupedIds = output.reconciliation?.matchGroups.flatMap((group) => [
       ...group.bankTransactionIds,

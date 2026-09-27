@@ -60,6 +60,31 @@ describe("Multi-bank XLSX profile detection", () => {
     expect(records[1]!.value).toBe("1000.00");
   });
 
+  it("detecta o XLSX Bradesco de valor único sem classificá-lo como Itaú", async () => {
+    const buffer = await createXlsxBuffer("Lançamentos", [
+      ["Atualização:", "31/12/2025 10:18"],
+      ["Nome:", "EMPRESA EXEMPLO"],
+      ["Agência:", "3394"],
+      ["Conta:", "0012545-8"],
+      [],
+      ["Data", "Lançamento", "Ag/origem", "Razão Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["28/11/2025", "SALDO ANTERIOR", "", "", "", "", "1.000,00"],
+      ["01/12/2025", "TRANSFERENCIA PIX", "339401", "EMPRESA", "", "200,00", "1.200,00"],
+      ["02/12/2025", "PAGAMENTO", "339402", "FORNECEDOR", "", "-50,00", "1.150,00"],
+    ]);
+
+    const { records, metadata, issues } = await parseTabularStatement(input("Bradesco_0012545-8_dados_limpos", buffer), ALL_PROFILES);
+
+    expect(issues.filter((item) => item.severity === "ERROR")).toHaveLength(0);
+    expect(metadata).toMatchObject({
+      bank: "237",
+      agency: "3394",
+      account: "0012545-8",
+      parser: "bradesco-checking-xlsx-v1",
+    });
+    expect(records).toHaveLength(2);
+  });
+
   it("should detect BB layout with débito (r$)/crédito (r$) headers", async () => {
     const buffer = await createXlsxBuffer("Banco do Brasil", [
       ["Banco do Brasil S.A."],

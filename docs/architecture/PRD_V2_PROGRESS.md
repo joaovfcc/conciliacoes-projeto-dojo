@@ -8,6 +8,8 @@ Fonte de requisitos: `PRD_EVOLUCAO_MOTOR_CONCILIACAO_BANCARIA.md`, versão 2.0.
 |---|---|---|---|
 | Invariantes de matching | Matching particionado por mapeamento confirmado, `Decimal`, seleção máxima global forçada, ordenação estável e testes de propriedade | `reconciliation.test.ts` | Parcial: 1:N/N:1 ainda fora do escopo |
 | Épico 0 — conta incompatível | Validação do mapeamento conta contábil × banco/agência/conta no runtime; bloqueio `BANK_ACCOUNT_MISMATCH` | `account-mapping.test.ts`, `account-mapping-gate.test.ts` | Implementado |
+| Identidade bancária canônica | Banco, agência, conta-base e dígito são normalizados uma vez; identidade confirmada permite vínculo automático, identidade parcial exige seleção manual e conflito explícito bloqueia a execução | `bank-identity.test.ts`, `reconciliation-identity.test.ts`, `account-mapping-gate.test.ts` | Implementado |
+| XLSX bancário sem falso banco | Perfis específicos exigem evidência da instituição e podem usar cabeçalhos distintivos; o layout genérico não inventa o banco a partir de colunas comuns | `multi-bank-xlsx.test.ts`, suíte unitária do core | Implementado; novas famílias continuam sujeitas à homologação |
 | Valor isolado | `VALUE_ONLY_SUGGESTION`; nunca entra nas contagens automáticas | `reconciliation.test.ts` | Implementado |
 | Regras de matching V2 iniciais | Exata, tolerância de data, documento ausente, divergência de valor/data, sugestão e ambiguidade | `reconciliation.test.ts` | Parcial |
 | Extrato sem movimentos | `STATEMENT_MOVEMENTS_NOT_EXTRACTED` bloqueia sem mensagem explícita; aviso somente quando há declaração de ausência | `pdf-statements.test.ts` | Implementado |
@@ -37,6 +39,9 @@ Fonte de requisitos: `PRD_EVOLUCAO_MOTOR_CONCILIACAO_BANCARIA.md`, versão 2.0.
 | Estratégia PDF-first/CSV alternativo | Especificação executável, decisões, tarefas e releases separados | `.specs/features/pdf-first-csv-alternative/` | Implementado |
 | Inventário por pasta ou ZIP | Enumeração recursiva, SHA-256, trava de quantidade e relatório sanitizado v2 | 68 PDFs, 68 hashes únicos, `private-corpus.test.ts` | Implementado |
 | Matriz integral por família | Catálogo tipado de 36 famílias, 18 instituições e 68 PDFs | `corpus-support-matrix.test.ts`, `PRD_V2_SUPPORT_MATRIX.md` | Implementado |
+| Catálogo escalável de instituições | 23 entradas de identidade: 18 observadas no corpus e 5 aguardando amostra; a entrada não declara adapter nem homologação | `bank-directory.test.ts`, `bank-metadata-extractor.ts` | Implementado |
+| Lote 4 — Paulista, Pine e Vórtx CC | Cinco adapters PDF textuais com identidade, período, movimentos, controles de saldo ou ausência estrutural de movimentos | `lot-4-current-accounts.test.ts`, inventário privado 68/68 | Parcial: aguardando oráculos; documento Vórtx de carteira permanece sem adapter |
+| Lote 5 — Safra | Quatro adapters textuais: conta-corrente, fundo, COE e produtos automáticos; investimentos permanecem exclusivamente informativos | `lot-4-current-accounts.test.ts`, inventário privado 68/68 | Parcial: aguardando oráculos e controles de saldo homologados |
 | Disponibilidade de formatos | PDF presente; OFX/CSV/XLSX bancário explicitamente `NOT_PROVIDED` | `PRD_V2_FORMAT_AVAILABILITY_MATRIX.md` | Parcial: referências anônimas de conta aguardam manifesto privado |
 
 ## Limitações declaradas
@@ -50,11 +55,15 @@ Fonte de requisitos: `PRD_EVOLUCAO_MOTOR_CONCILIACAO_BANCARIA.md`, versão 2.0.
 - O inventário separa pista de instituição (somente para agrupar o corpus privado) da identidade bancária detectada. Assim, nenhum dos 32 documentos extraídos foi indevidamente promovido a `HOMOLOGATED`: todos aguardam oráculo humano e os controles aplicáveis.
 - A dimensão instituição × conta da matriz de formatos aguarda um manifesto privado hash → referência opaca. A estrutura e os status de formato estão prontos; números reais de conta não serão inferidos nem versionados.
 - Não foi fornecido extrato OFX, CSV ou XLSX bancário no corpus atual. Todos permanecem `NOT_PROVIDED`; isso não bloqueia adapters PDF nem a infraestrutura CSV sintética.
+- O cadastro de contas melhora o vínculo automático, mas não seleciona adapter nem transforma um layout em homologado. Dados bancários incompletos permitem vínculo manual; somente divergências explícitas bloqueiam a conciliação.
+- O catálogo possui capacidade de reconhecimento de identidade para 23 instituições, mas o corpus atual contém documentos de somente 18. As cinco entradas sem amostra não possuem adapter, regra de saldo ou status de homologação.
+- O ambiente local possui Poppler, mas não possui Tesseract com o idioma português; portanto os 18 PDFs que exigem OCR permanecem bloqueados de forma explícita.
+- O documento de carteira agrupado sob Vórtx declara “Acreditar Securitizadora” no conteúdo. A identificação não será inferida pelo nome de pasta sem uma regra de proveniência aprovada.
 
 ## Próxima sequência segura
 
-1. Executar os gates integrais do Lote 3 e avançar para Paulista no Lote 4.
-2. Executar o OCR Bocom BBM em ambiente com Tesseract `por`; manter período ausente como revisão obrigatória.
-3. Obter e revisar os oráculos privados das 24 extrações atuais antes de declarar qualquer família homologada.
-4. Prosseguir por Daycoval e Guanabara, sempre com fixture sintética, teste de colisão e inventário privado.
+1. Executar os gates integrais do Lote 5 e prosseguir para as notas Safra dependentes de OCR, mantendo cada família isolada.
+2. Executar o OCR Bocom BBM e Itaú em ambiente com Tesseract `por`; manter período ausente como revisão obrigatória.
+3. Obter e revisar os oráculos privados das 41 extrações atuais antes de declarar qualquer família homologada.
+4. Solicitar uma amostra autorizada para cada uma das cinco instituições fora do corpus antes de criar adapters.
 5. Elevar cobertura e mutation testing dos adapters antes das sugestões 1:N/N:1.

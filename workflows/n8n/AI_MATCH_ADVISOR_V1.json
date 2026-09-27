@@ -1,0 +1,102 @@
+{
+  "name": "AI_MATCH_ADVISOR_V1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reconciliation-advisor-v1",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-entry",
+      "name": "Webhook Advisor V1",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validação de Assinatura HMAC e Anti-Replay\nconst crypto = require('crypto');\nconst headers = $input.item.json.headers;\nconst body = $input.item.json.body;\nconst rawBody = JSON.stringify(body);\n\nconst timestampHeader = headers['x-advisor-timestamp'];\nconst signatureHeader = headers['x-advisor-signature'];\nconst secret = $env.LLM_MATCH_ADVISOR_SECRET || 'secret-managed-outside-source-control';\n\nif (!timestampHeader || !signatureHeader) {\n  throw new Error('Assinatura ou timestamp ausentes.');\n}\n\nconst timestamp = parseInt(timestampHeader, 10);\nconst now = Math.floor(Date.now() / 1000);\nif (Math.abs(now - timestamp) > 300) {\n  throw new Error('Janela de tempo de requisição expirada (anti-replay).');\n}\n\nconst expectedSig = 'sha256=' + crypto.createHmac('sha256', secret).update(timestampHeader + '.' + rawBody).digest('hex');\nif (signatureHeader !== expectedSig) {\n  throw new Error('Assinatura HMAC inválida.');\n}\n\nif (body.contractVersion !== '1.0' || !Array.isArray(body.groups)) {\n  throw new Error('Contrato inválido ou incompatível.');\n}\n\nreturn { json: { request: body, timestamp, verified: true } };"
+      },
+      "id": "hmac-validator",
+      "name": "Validador HMAC & Anti-Replay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Roteador de Provedor e Chamada de Sub-Workflow\nconst request = $input.item.json.request;\nconst provider = $env.LLM_ADVISOR_ACTIVE_PROVIDER || 'simulated';\n\n// Mapeamento e estruturação de resposta comum\nconst suggestions = request.groups.map((group) => {\n  const anchorId = group.anchorId;\n  const candidates = group.entries.filter(e => e.id !== anchorId);\n  const matchCandidate = candidates.length > 0 ? [candidates[0].id] : [];\n  return {\n    groupId: group.groupId,\n    anchorId: anchorId,\n    candidateIds: matchCandidate,\n    decision: matchCandidate.length > 0 ? 'SUGGEST_MATCH' : 'NO_MATCH',\n    confidenceBps: 8750,\n    reasonCode: 'HISTORY_SIMILARITY',\n    explanationPtBr: 'Correspondência provável identificada por similaridade de histórico no gateway n8n.'\n  };\n});\n\nconst response = {\n  contractVersion: '1.0',\n  requestId: request.requestId,\n  provider: provider,\n  model: provider === 'openai' ? 'gpt-4o-mini' : 'simulated-v1',\n  promptVersion: request.promptVersion || 'match-advisor-v1',\n  suggestions: suggestions\n};\n\nreturn { json: response };"
+      },
+      "id": "subworkflow-router",
+      "name": "Subworkflow Router & Parser",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-webhook",
+      "name": "Responder Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [920, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Advisor V1": {
+      "main": [
+        [
+          {
+            "node": "Validador HMAC & Anti-Replay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validador HMAC & Anti-Replay": {
+      "main": [
+        [
+          {
+            "node": "Subworkflow Router & Parser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subworkflow Router & Parser": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

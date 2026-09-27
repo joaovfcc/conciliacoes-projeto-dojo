@@ -162,20 +162,95 @@ async function loadPrincipal(prisma: AuthDbClient, userId: string): Promise<Auth
       },
     },
   });
+
+  const ownerOrgIds = user.organizationMemberships.map((membership) => membership.organizationId);
+
+  // Se o usuário for OWNER de alguma organização, auto-provisionar empresa padrão caso nenhuma exista
+  for (const orgId of ownerOrgIds) {
+    const companyCount = await prisma.company.count({ where: { organizationId: orgId, status: "ACTIVE" } });
+    if (companyCount === 0) {
+      const legalEntityId = `entity-${orgId}`;
+      const existingEntity = await prisma.configLegalEntity.findUnique({
+        where: { organizationId_id: { organizationId: orgId, id: legalEntityId } },
+      });
+      const now = new Date();
+      if (!existingEntity) {
+        await prisma.configLegalEntity.create({
+          data: {
+            organizationId: orgId,
+            id: legalEntityId,
+            legalName: "Empresa Matriz Principal",
+            taxId: "00000000000191",
+            status: "ACTIVE",
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+      await prisma.company.create({
+        data: {
+          organizationId: orgId,
+          legalEntityId,
+          name: "Empresa Matriz",
+          documentNumber: "00.000.000/0001-91",
+          status: "ACTIVE",
+          timezone: "America/Sao_Paulo",
+          defaultCurrency: "BRL",
+        },
+      });
+    }
+  }
+
+  // Buscar todas as empresas ativas das organizações onde o usuário é OWNER
+  const ownerCompanies = ownerOrgIds.length > 0
+    ? await prisma.company.findMany({
+        where: { organizationId: { in: ownerOrgIds }, status: "ACTIVE" },
+        select: { id: true, organizationId: true, name: true },
+      })
+    : [];
+
+  const explicitMap = new Map<string, { organizationId: string; name: string; roles: CompanyRole[] }>();
+  for (const access of user.companyAccesses) {
+    explicitMap.set(access.companyId, {
+      organizationId: access.company.organizationId,
+      name: access.company.name,
+      roles: access.roles as CompanyRole[],
+    });
+  }
+
+  // Se o usuário for OWNER da organização, conceder papéis totais nas empresas daquela organização
+  for (const company of ownerCompanies) {
+    const existing = explicitMap.get(company.id);
+    if (existing) {
+      const combinedRoles = Array.from(new Set([...existing.roles, "ADMIN", "PREPARER", "REVIEWER", "AUDITOR"] as CompanyRole[]));
+      explicitMap.set(company.id, { ...existing, roles: combinedRoles });
+    } else {
+      explicitMap.set(company.id, {
+        organizationId: company.organizationId,
+        name: company.name,
+        roles: ["ADMIN", "PREPARER", "REVIEWER", "AUDITOR"],
+      });
+    }
+  }
+
+  const companiesList = Array.from(explicitMap.entries()).map(([id, data]) => ({
+    id,
+    organizationId: data.organizationId,
+    name: data.name,
+    roles: data.roles,
+  }));
+
+  const companyRolesRecord = Object.fromEntries(
+    companiesList.map((c) => [c.id, c.roles]),
+  );
+
   return {
     id: user.id,
     email: user.email,
     passwordChangeRequired: user.passwordChangeRequired,
-    ownerOrganizationIds: user.organizationMemberships.map((membership) => membership.organizationId),
-    companyRoles: Object.fromEntries(
-      user.companyAccesses.map((access) => [access.companyId, access.roles as CompanyRole[]]),
-    ),
-    companies: user.companyAccesses.map((access) => ({
-      id: access.companyId,
-      organizationId: access.company.organizationId,
-      name: access.company.name,
-      roles: access.roles as CompanyRole[],
-    })),
+    ownerOrganizationIds: ownerOrgIds,
+    companyRoles: companyRolesRecord,
+    companies: companiesList,
   };
 }
 

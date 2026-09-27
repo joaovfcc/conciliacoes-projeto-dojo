@@ -10,7 +10,9 @@ export interface StatementLayoutProfile {
 
   detection: {
     sheetNameAliases?: string[];
+    institutionPatterns?: string[];
     requiredHeaderGroups: string[][];
+    distinctiveHeaderGroups?: string[][];
     optionalHeaders?: string[];
     negativeSheetNames?: string[];
     minimumScore: number;
@@ -25,6 +27,7 @@ export interface StatementLayoutProfile {
     debit?: string[];
     credit?: string[];
     balance?: string[];
+    dcIndicator?: string[];
   };
 
   rules: {
@@ -65,6 +68,7 @@ export interface ParsedStatement {
   transactions: NormalizedBankTransaction[];
   warnings: TabularWarning[];
   metadata?: {
+    bank?: string;
     agency?: string;
     account?: string;
     openingBalance?: number;

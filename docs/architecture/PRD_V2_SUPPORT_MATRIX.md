@@ -20,10 +20,10 @@ derivados, classificação, adapter e diagnósticos; caminho e nome original nun
 ## Resultado do inventário
 
 - 68 PDFs e 18 instituições inventariados.
-- 32 PDFs foram extraídos, mas permanecem `PARSED_AWAITING_ORACLE`.
-- 5 PDFs foram reconhecidos, porém falharam no gate de movimentos.
+- 41 PDFs foram extraídos, mas permanecem `PARSED_AWAITING_ORACLE`.
+- 6 PDFs foram reconhecidos, porém falharam no gate de movimentos.
 - 18 PDFs exigem OCR em português.
-- 11 layouts textuais estão explicitamente sem adapter.
+- 1 layout textual está explicitamente sem adapter.
 - 2 PDFs protegidos por senha são bloqueados com diagnóstico explícito.
 
 “Pista de inventário” é derivada apenas do nome privado para agrupar a cobertura. Ela não é usada
@@ -42,13 +42,13 @@ pela detecção, pelo parser ou pela conciliação. “Detectado” é a identid
 | Daycoval | 3 | 3 extraídos | 3 CC | Adapter implementado, aguardando oráculos | Revisar oráculos dos resultados com 13, 0 e 29 movimentos |
 | Guanabara | 2 | 2 extraídos sem movimentos | 1 CC, 1 conta vinculada | Dois adapters implementados, aguardando oráculos | Confirmar saldos e ausência de movimentos nos oráculos |
 | Itaú | 2 | 2 OCR pendentes | — | OCR não homologado | Habilitar OCR `por`, depois separar CC e Aplic Aut Mais |
-| Paulista | 2 | 2 layouts não suportados | — | Sem adapter | Criar contrato/fixture do layout |
-| Pine | 3 | 3 layouts não suportados | — | Sem adapter | Criar contrato/fixture do layout |
+| Paulista | 2 | 2 extraídos | 1 CC, 1 conta vinculada | Dois adapters implementados, aguardando oráculo | Revisar oráculos e homologar controles de saldo |
+| Pine | 3 | 3 extraídos | 1 CC, 2 contas vinculadas | Dois adapters implementados, aguardando oráculo | Revisar oráculos e homologar controles de saldo |
 | Planner | 2 | 2 PDFs protegidos por senha | — | Bloqueado explicitamente | Exportar cópia sem proteção; não solicitar senha |
-| Safra | 17 | 13 OCR pendentes, 4 layouts não suportados | — | Sem adapter | Primeiro CC; depois fundo, certificado, automático e nota |
+| Safra | 17 | 4 documentos textuais extraídos, 13 OCR pendentes | 1 CC, 3 investimentos | Quatro adapters implementados, aguardando oráculos | Homologar CC e conferência dos investimentos; depois notas OCR |
 | Santander | 2 | 1 extraído, 1 OCR pendente | 1 CC | Implementado, aguardando oráculo e saldo | Separar CC e investimento automático |
 | Sofisa | 6 | 6 extraídos | 5 CC, 1 posição | Implementado, aguardando oráculo e saldo | Controle de saldo CC e posição de conferência |
-| Vórtx | 2 | 2 layouts não suportados | — | Sem adapter | Conta corrente e carteira de debêntures separadamente |
+| Vórtx | 2 | 1 CC extraída, 1 documento ainda sem adapter | 1 CC | Adapter CC implementado, aguardando oráculo | Separar e classificar a carteira de debêntures |
 
 ## Matriz completa por família PDF
 
@@ -81,16 +81,16 @@ documentos seja removido silenciosamente.
 | 3 | Daycoval | Conta-corrente | `DAYCOVAL_CC_EXTRATO_DETALHADO` | 3 | Texto | `PARTIAL_ADAPTER` |
 | 3 | Guanabara | Conta-corrente | `GUANABARA_CC` | 1 | Texto | `PARTIAL_ADAPTER` |
 | 3 | Guanabara | Conta vinculada | `GUANABARA_CONTA_VINCULADA` | 1 | Texto | `PARTIAL_ADAPTER` |
-| 4 | Paulista | Conta-corrente | `PAULISTA_CC_DEMONSTRATIVO` | 1 | Texto | `UNSUPPORTED` |
-| 4 | Paulista | Conta vinculada | `PAULISTA_CONTA_VINCULADA` | 1 | Texto | `UNSUPPORTED` |
-| 4 | Pine | Conta-corrente | `PINE_CC` | 1 | Texto | `UNSUPPORTED` |
-| 4 | Pine | Conta vinculada | `PINE_CONTA_VINCULADA` | 2 | Texto | `UNSUPPORTED` |
-| 4 | Vórtx | Conta-corrente | `VORTX_CC` | 1 | Texto | `UNSUPPORTED` |
+| 4 | Paulista | Conta-corrente | `PAULISTA_CC_DEMONSTRATIVO` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 4 | Paulista | Conta vinculada | `PAULISTA_CONTA_VINCULADA` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 4 | Pine | Conta-corrente | `PINE_CC` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 4 | Pine | Conta vinculada | `PINE_CONTA_VINCULADA` | 2 | Texto | `PARTIAL_ADAPTER` |
+| 4 | Vórtx | Conta-corrente | `VORTX_CC` | 1 | Texto | `PARTIAL_ADAPTER` |
 | 4 | Vórtx | Carteira de debêntures | `VORTX_DEBENTURE_PORTFOLIO` | 1 | Texto | `INFORMATIONAL_ONLY` |
-| 5 | Safra | Conta-corrente | `SAFRA_CC_MOVIMENTACAO` | 1 | Texto | `CLASSIFICATION_BLOCKED` |
-| 5 | Safra | Fundo | `SAFRA_FUNDO_POSICAO` | 1 | Texto | `UNSUPPORTED` |
-| 5 | Safra | COE | `SAFRA_COE_POSICAO` | 1 | Texto | `UNSUPPORTED` |
-| 5 | Safra | Produto automático | `SAFRA_PRODUTOS_AUTOMATICOS` | 1 | Texto | `UNSUPPORTED` |
+| 5 | Safra | Conta-corrente | `SAFRA_CC_MOVIMENTACAO` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 5 | Safra | Fundo | `SAFRA_FUNDO_POSICAO` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 5 | Safra | COE | `SAFRA_COE_POSICAO` | 1 | Texto | `PARTIAL_ADAPTER` |
+| 5 | Safra | Produto automático | `SAFRA_PRODUTOS_AUTOMATICOS` | 1 | Texto | `PARTIAL_ADAPTER` |
 | 5 | Safra | Nota de negociação | `SAFRA_NOTA_NEGOCIACAO` | 13 | OCR | `UNSUPPORTED` |
 | 6 | Planner | Documento protegido A | `PLANNER_PROTECTED_A` | 1 | Protegido | `PASSWORD_PROTECTED` |
 | 6 | Planner | Documento protegido B | `PLANNER_PROTECTED_B` | 1 | Protegido | `PASSWORD_PROTECTED` |
@@ -104,3 +104,11 @@ Uma combinação instituição × tipo × família só muda para `HOMOLOGATED` q
 fixture sintética, teste de colisão, controle de integridade aplicável, execução no arquivo privado,
 oráculo revisado por pessoa autorizada e aprovação contábil. A saída corrente do parser não pode ser
 usada como oráculo.
+
+## Bloqueios técnicos atuais
+
+- O ambiente local possui Poppler, mas não possui Tesseract com o idioma `por`; os 18 PDFs que exigem
+  OCR ficam bloqueados com diagnóstico, sem extração parcial.
+- A carteira de debêntures agrupada sob Vórtx no corpus traz “Acreditar Securitizadora” como emissor no
+  próprio conteúdo. Sem uma regra de proveniência ou oráculo autorizado, ela não será atribuída a Vórtx
+  nem classificada automaticamente.

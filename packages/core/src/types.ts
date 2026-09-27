@@ -1,11 +1,13 @@
 export const resultStatuses = [
   "AUTO_MATCH_EXACT",
+  "AUTO_MATCH_UNIQUE_VALUE",
   "AUTO_MATCH_DATE_TOLERANCE",
   "AUTO_MATCH_VALUE_DATE",
   "AUTO_MATCH_GROUP",
   "AUTO_MATCH_DAILY_TOTAL",
   "BANK_NET_ZERO",
   "AUTO_APPLICATION_EXCLUDED",
+  "GROUP_SUGGESTION",
   "VALUE_ONLY_SUGGESTION",
   "VALUE_DIVERGENCE",
   "DATE_DIVERGENCE",
@@ -188,9 +190,22 @@ export type PreflightResult = {
   detectedPeriods: Array<{ period: string; recordCount: number }>;
   ledgerAccounts: DetectedLedgerAccount[];
   statements: DetectedStatement[];
+  /**
+   * Vínculos ativos do cadastro da empresa, anexados pelo adaptador da
+   * aplicação após a leitura dos arquivos. Eles somente sugerem uma conta;
+   * qualquer conflito continua exigindo escolha humana.
+   */
+  registeredAccountMappings?: RegisteredAccountMapping[];
   investments: InvestmentEntry[];
   issues: ImportIssue[];
   requiresUserInput: boolean;
+};
+
+export type RegisteredAccountMapping = {
+  bank?: string;
+  agency?: string;
+  account?: string;
+  ledgerAccount: string;
 };
 
 export type ConfirmProcessingRequest = {
@@ -208,9 +223,53 @@ export type AccountMapping = {
   ledgerAccount: string;
   statementFileIds: string[];
   signProfile: SignProfile;
+  /**
+   * Contas físicas confirmadas explicitamente como parte do mesmo escopo
+   * lógico nesta execução. Cada declaração é conferida novamente contra a
+   * identidade extraída do extrato; ela nunca ignora uma divergência.
+   */
+  linkedPhysicalAccounts?: LinkedPhysicalAccount[];
+};
+
+export type LinkedPhysicalAccount = {
+  statementFileId: string;
+  bank: string;
+  agency: string;
+  account: string;
+  role: "PRIMARY" | "LINKED";
 };
 
 export type ControlStatus = "PASSED" | "FAILED" | "NOT_AVAILABLE";
+
+export type LineCoverageMetric = {
+  covered: string;
+  total: string;
+  pending?: string;
+  percentage: string;
+  formula?: string;
+  label?: string;
+};
+
+export type ValueCoverageMetric = {
+  covered: string;
+  total: string;
+  pending?: string;
+  percentage: string;
+  formula?: string;
+  label?: string;
+};
+
+export type CoverageBreakdown = {
+  lines: LineCoverageMetric;
+  absoluteValue: ValueCoverageMetric;
+};
+
+export type CoverageDimensions = {
+  ledger: CoverageBreakdown;
+  statementOperational: CoverageBreakdown;
+  statementTotal: CoverageBreakdown;
+  overallOperational: CoverageBreakdown;
+};
 
 export type ProcessingControls = {
   tolerance: string;
@@ -232,8 +291,19 @@ export type ProcessingControls = {
     closingStatus: ControlStatus;
   };
   coverage: {
-    lines: { covered: string; total: string; percentage: string };
-    absoluteValue: { covered: string; total: string; percentage: string };
+    lines: LineCoverageMetric;
+    absoluteValue: ValueCoverageMetric;
+    ledger?: CoverageBreakdown;
+    statementOperational?: CoverageBreakdown;
+    statementTotal?: CoverageBreakdown;
+    overallOperational?: CoverageBreakdown;
+    statement?: CoverageBreakdown;
+    operational?: CoverageBreakdown;
+    overall?: CoverageBreakdown;
+    /** Linhas reservadas por sugestões pendentes de aprovação humana. */
+    suggested?: CoverageDimensions;
+    /** Cobertura confirmada somada às sugestões, sem promovê-las a conciliadas. */
+    potential?: CoverageDimensions;
   };
   countsByStatus: Array<{ status: ResultStatus; count: string }>;
   pendingByDate: Array<{
@@ -262,8 +332,20 @@ export type ReconciliationResult = {
   valueTolerance: string;
   ruleVersion?: string;
   score?: number;
+  /** Grupo revisável criado quando o mesmo valor possui mais de um candidato. */
+  ambiguityGroup?: AmbiguityGroup;
   matchGroup?: import("./reconciliation/domain/ReconciliationEngine.js").ReconciliationMatchGroup;
   audit?: import("./reconciliation/domain/ReconciliationEngine.js").ReconciliationAuditEntry;
+};
+
+export type AmbiguityGroup = {
+  id: string;
+  ledgerAccount: string;
+  amount: string;
+  ledgerCandidateIds: string[];
+  statementCandidateIds: string[];
+  reason: string;
+  evaluatedAt: string;
 };
 
 export type AccountSummary = {
@@ -274,6 +356,9 @@ export type AccountSummary = {
   balanceDifference: string;
   reconciledCount: number;
   reconciledValue: string;
+  suggestedGroupCount?: number;
+  suggestedLedgerCount?: number;
+  suggestedStatementCount?: number;
   divergenceCount: number;
   ledgerWithoutStatementCount: number;
   statementWithoutLedgerCount: number;
@@ -283,6 +368,7 @@ export type AccountSummary = {
 };
 
 export type ProcessingResult = {
+  resultSchemaVersion?: "2.0";
   company: string;
   branch: string;
   period: string;

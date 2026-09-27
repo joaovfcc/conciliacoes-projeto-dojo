@@ -10,6 +10,7 @@ export const ITAU_CHECKING_XLSX_V1: StatementLayoutProfile = {
 
   detection: {
     sheetNameAliases: ["lançamentos"],
+    institutionPatterns: ["itaú", "itau"],
     requiredHeaderGroups: [
       ["data", "data de lançamento"],
       ["lançamento", "histórico", "descrição", "razão social"],

@@ -6,6 +6,7 @@
   "scripts": {
     "postinstall": "pnpm --filter @conciliacao/core prisma:generate",
     "dev": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && pnpm --filter @conciliacao/web dev",
+    "dev:local": "cross-env LOCAL_MODE=true pnpm --filter @conciliacao/web dev",
     "build:web": "pnpm --filter @conciliacao/web build",
     "build:worker": "pnpm --filter @conciliacao/worker build",
     "build": "pnpm -r build",
@@ -24,7 +25,14 @@
     "test:private-statements": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && node scripts/test-private-statements.mjs",
     "test:legacy": "node legacy/python/scripts/run-tests.mjs",
     "typecheck": "pnpm -r typecheck && tsc -p tsconfig.tests.json --noEmit",
-    "lint": "pnpm -r lint && eslint tests vitest.config.ts --max-warnings=0"
+    "lint": "pnpm -r lint && eslint tests vitest.config.ts --max-warnings=0",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:ps": "docker compose ps",
+    "db:logs": "docker compose logs -f postgres",
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "db:seed": "node scripts/db-seed.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

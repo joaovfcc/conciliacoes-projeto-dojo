@@ -3,7 +3,22 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { bankAccountsConflict, generateXlsx, preflightFiles, reconcile, StatementParseError, type CompletedReconciliationRepository, type ConfirmProcessingRequest, type OcrProvider, type SourceFileInput } from "@conciliacao/core";
+import {
+  AdvisorOrchestrator,
+  DisabledMatchAdvisor,
+  bankAccountsConflict,
+  bankAccountsMatch,
+  generateXlsx,
+  preflightFiles,
+  reconcile,
+  StatementParseError,
+  type CompletedReconciliationRepository,
+  type ConfirmProcessingRequest,
+  type LlmMatchAdvisor,
+  type OcrProvider,
+  type SourceFileInput,
+} from "@conciliacao/core";
+import { N8nMatchAdvisor } from "./advisor/n8n-match-advisor.js";
 import { Queue } from "bullmq";
 import type { RuntimeConfig } from "./config.js";
 import type { ObjectStore } from "./object-store.js";
@@ -16,7 +31,22 @@ export class RuntimeServices {
     readonly sessions: SessionStore,
     readonly objects: ObjectStore,
     readonly completedReconciliations: CompletedReconciliationRepository,
-  ) {}
+  ) { }
+
+  createAdvisor(): LlmMatchAdvisor {
+    if (
+      this.config.llmMatchAdvisorMode === "DISABLED" ||
+      !this.config.llmMatchAdvisorUrl ||
+      !this.config.llmMatchAdvisorSecret
+    ) {
+      return new DisabledMatchAdvisor();
+    }
+    return new N8nMatchAdvisor({
+      url: this.config.llmMatchAdvisorUrl,
+      secret: this.config.llmMatchAdvisorSecret,
+      timeoutMs: this.config.llmMatchAdvisorTimeoutMs,
+    });
+  }
 
   async registerUpload(session: ReconciliationSession, input: { kind: "LEDGER" | "STATEMENT"; originalName: string; contentType: string; size: number }): Promise<{ file: StoredFile; uploadUrl: string | null }> {
     validateUploadShape(session, input, this.config);
@@ -28,13 +58,13 @@ export class RuntimeServices {
   async completeUpload(session: ReconciliationSession, fileId: string): Promise<StoredFile> {
     const file = session.files.find((item) => item.id === fileId); if (!file) throw new PublicRuntimeError("ARQUIVO_NAO_ENCONTRADO", "O arquivo não pertence a esta sessão.", 404);
     try {
-    const buffer = await this.objects.get(file.objectKey); if (buffer.length !== file.size) throw new PublicRuntimeError("TAMANHO_DIVERGENTE", "O tamanho recebido difere do upload autorizado.", 400);
-    validateSignature(file, buffer); validateOfficeArchive(file, buffer); await scanBuffer(buffer, file.originalName, this.config);
-    file.sha256 = createHash("sha256").update(buffer).digest("hex");
-    const duplicate = session.files.find((item) => item.id !== file.id && item.sha256 === file.sha256); if (duplicate) throw new PublicRuntimeError("ARQUIVO_DUPLICADO", "O mesmo conteúdo foi enviado mais de uma vez.", 400);
-    const ledgerCount = session.files.filter((item) => item.kind === "LEDGER" && item.sha256).length;
-    const statementCount = session.files.filter((item) => item.kind === "STATEMENT" && item.sha256).length;
-    session.status = ledgerCount === 1 && statementCount >= 1 ? "READY" : "UPLOADING"; await this.sessions.save(session); return file;
+      const buffer = await this.objects.get(file.objectKey); if (buffer.length !== file.size) throw new PublicRuntimeError("TAMANHO_DIVERGENTE", "O tamanho recebido difere do upload autorizado.", 400);
+      validateSignature(file, buffer); validateOfficeArchive(file, buffer); await scanBuffer(buffer, file.originalName, this.config);
+      file.sha256 = createHash("sha256").update(buffer).digest("hex");
+      const duplicate = session.files.find((item) => item.id !== file.id && item.sha256 === file.sha256); if (duplicate) throw new PublicRuntimeError("ARQUIVO_DUPLICADO", "O mesmo conteúdo foi enviado mais de uma vez.", 400);
+      const ledgerCount = session.files.filter((item) => item.kind === "LEDGER" && item.sha256).length;
+      const statementCount = session.files.filter((item) => item.kind === "STATEMENT" && item.sha256).length;
+      session.status = ledgerCount === 1 && statementCount >= 1 ? "READY" : "UPLOADING"; await this.sessions.save(session); return file;
     } catch (error) {
       try {
         await this.deleteObject(file.objectKey);
@@ -67,10 +97,14 @@ export class RuntimeServices {
     if (!this.config.redisUrl) { await this.preflight(session); return; }
     const queue = processingQueue(this.config.redisUrl);
     try {
-      try { await assertQueueCapacity(queue, this.config.maxQueuedJobs); }
-      catch (error) { await this.cleanup(session); throw error; }
+      await assertWorkerAvailable(queue);
+      await assertQueueCapacity(queue, this.config.maxQueuedJobs);
       session.status = "QUEUED"; session.pendingAction = "PREFLIGHT"; session.progress = 10; session.progressMessage = "Pré-análise aguardando o worker."; await this.sessions.save(session);
-      await queue.add("preflight", { sessionId: session.id, action: "preflight" }, { jobId: `${session.id}-preflight`, removeOnComplete: 100, removeOnFail: 100, attempts: 1 });
+      await withInfrastructureDeadline(queue.add("preflight", { sessionId: session.id, action: "preflight" }, { jobId: `${session.id}-preflight`, removeOnComplete: 100, removeOnFail: 100, attempts: 1 }));
+    } catch (error) {
+      const publicError = processingInfrastructureError(error);
+      await this.cleanup(session).catch(() => undefined);
+      throw publicError;
     } finally {
       await queue.close();
     }
@@ -92,7 +126,42 @@ export class RuntimeServices {
     let historyAvailable = false;
     let filesDeleted = false;
     try {
-      const result = reconcile(session.ledgers, session.statements, confirmation, session.preflight); result.issues = [...session.preflight.issues, ...result.issues]; result.files = session.preflight.statements; result.investments = session.investments ?? [];
+      let result = reconcile(session.ledgers, session.statements, confirmation, session.preflight);
+      if (this.config.llmMatchAdvisorMode !== "DISABLED") {
+        try {
+          const advisor = this.createAdvisor();
+          const orchestrator = new AdvisorOrchestrator();
+          const advisorOutput = await orchestrator.execute(
+            result,
+            session.ledgers,
+            session.statements,
+            confirmation.mappings,
+            advisor,
+            {
+              mode: this.config.llmMatchAdvisorMode,
+              candidateOptions: {
+                promptVersion: this.config.llmMatchPromptVersion,
+                maxGroupsPerRequest: this.config.llmMatchMaxGroupsPerRequest,
+                maxCandidatesPerGroup: this.config.llmMatchMaxCandidatesPerGroup,
+                dateToleranceDays: confirmation.dateToleranceDays,
+              },
+            },
+          );
+          result = advisorOutput.result;
+          if (advisorOutput.metrics.error) {
+            result.issues.push({
+              severity: "WARNING",
+              code: "ADVISOR_FALLBACK",
+              message: "O assistente de IA falhou de forma segura e o resultado determinístico foi preservado.",
+            });
+          }
+        } catch {
+          // Fallback seguro incondicional: mantém o resultado determinístico
+        }
+      }
+      result.issues = [...session.preflight.issues, ...result.issues];
+      result.files = session.preflight.statements;
+      result.investments = session.investments ?? [];
       session.progress = 90; session.progressMessage = "RF-02 a RF-09 concluídas; consolidando controles e evidências."; await this.sessions.save(session);
       await this.assertSessionActive(session.id, processingAttemptId);
       const status = result.issues.some((item) => item.severity === "ERROR") || result.results.some((item) => item.decisionLevel !== "AUTOMATIC") ? "COMPLETED_WITH_ISSUES" : "COMPLETED";
@@ -138,22 +207,29 @@ export class RuntimeServices {
   async enqueue(session: ReconciliationSession, confirmation: ConfirmProcessingRequest): Promise<void> {
     if (!session.ledgers || !session.statements || !session.preflight) throw new PublicRuntimeError("PREFLIGHT_AUSENTE", "Execute a pré-análise antes de confirmar.", 409);
     validateConfirmation(confirmation, session);
-    const claim = await this.sessions.claimConfirmation(session.id, confirmation);
-    if (claim === "CONFLICT") throw new PublicRuntimeError("IDEMPOTENCY_CONFLICT", "A sessão já possui outra confirmação em processamento.", 409);
-    if (claim === "MISSING") throw new PublicRuntimeError("SESSAO_NAO_AUTORIZADA", "A sessão não está mais disponível.", 401);
-    const current = await this.sessions.get(session.id);
-    if (!current || current.closed) throw new PublicRuntimeError("SESSAO_NAO_AUTORIZADA", "A sessão não está mais disponível.", 401);
-    session = current;
-    if (claim === "SAME") {
-      if (["RECONCILING", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(current.status)) return;
+    if (!this.config.redisUrl) {
+      const claim = await claimConfirmation(this.sessions, session.id, confirmation);
+      const current = await activeSession(this.sessions, session.id);
+      if (claim === "SAME" && ["RECONCILING", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(current.status)) return;
+      await this.process(current, confirmation);
+      return;
     }
-    if (!this.config.redisUrl) { await this.process(session, confirmation); return; }
     const queue = processingQueue(this.config.redisUrl);
     try {
-      try { await assertQueueCapacity(queue, this.config.maxQueuedJobs); }
-      catch (error) { await this.cleanup(session); throw error; }
+      try {
+        await assertWorkerAvailable(queue);
+        await assertQueueCapacity(queue, this.config.maxQueuedJobs);
+      } catch (error) {
+        throw processingInfrastructureError(error);
+      }
+      const claim = await claimConfirmation(this.sessions, session.id, confirmation);
+      const current = await activeSession(this.sessions, session.id);
+      session = current;
+      if (claim === "SAME" && ["RECONCILING", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(current.status)) return;
       session.status = "QUEUED"; session.pendingAction = "PROCESS"; session.progress = 50; session.progressMessage = "Execução aguardando o worker."; await this.sessions.save(session);
-      await queue.add("reconcile", { sessionId: session.id, action: "process" }, { jobId: `${session.id}-${confirmation.idempotencyKey}`, removeOnComplete: 100, removeOnFail: 100, attempts: 1 });
+      await withInfrastructureDeadline(queue.add("reconcile", { sessionId: session.id, action: "process" }, { jobId: `${session.id}-${confirmation.idempotencyKey}`, removeOnComplete: 100, removeOnFail: 100, attempts: 1 }));
+    } catch (error) {
+      throw processingInfrastructureError(error);
     } finally {
       await queue.close();
     }
@@ -278,17 +354,25 @@ function validateConfirmation(input: ConfirmProcessingRequest, session: Reconcil
     if (!mapping.ledgerAccount || !mapping.statementFileIds.length) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "Todo mapeamento deve possuir uma conta contábil e ao menos um extrato.", 422);
     const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === mapping.ledgerAccount);
     if (!ledgerAccount) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "A conta contábil selecionada não foi encontrada no razão enviado.", 422);
-    if (!ledgerAccount.bank || !ledgerAccount.agency || !ledgerAccount.bankAccount) throw new PublicRuntimeError("ACCOUNT_IDENTITY_MISSING", "A conta bancária vinculada à conta contábil não pôde ser identificada no razão.", 422);
     for (const fileId of mapping.statementFileIds) {
       if (mappedFileIds.has(fileId)) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "Um extrato só pode ser relacionado a uma conta contábil por execução.", 422);
       mappedFileIds.add(fileId);
       const statement = eligibleStatements.find((item) => item.fileId === fileId);
       if (!statement) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "O mapeamento contém um extrato que não está elegível para conciliação.", 422);
-      if (!statement.bank || !statement.agency || !statement.account) throw new PublicRuntimeError("ACCOUNT_IDENTITY_MISSING", "Banco, agência ou conta não puderam ser identificados no extrato.", 422);
-      if (bankAccountsConflict(ledgerAccount, statement)) throw new PublicRuntimeError("BANK_ACCOUNT_MISMATCH", "A conta bancária do extrato não corresponde à conta vinculada à conta contábil selecionada.", 422);
+      if (bankAccountsConflict(ledgerAccount, statement) && !hasDeclaredLinkedPhysicalAccount(mapping, statement)) {
+        throw new PublicRuntimeError("BANK_ACCOUNT_MISMATCH", "A conta bancária do extrato não corresponde à conta vinculada à conta contábil selecionada. Para utilizá-la, confirme-a explicitamente como conta física vinculada ao mesmo escopo lógico.", 422);
+      }
     }
   }
   if (mappedFileIds.size !== eligibleStatements.length || eligibleStatements.some((item) => !mappedFileIds.has(item.fileId))) throw new PublicRuntimeError("LEDGER_ACCOUNT_MAPPING_MISSING", "Confirme o relacionamento de todos os extratos elegíveis antes de conciliar.", 422);
+}
+
+function hasDeclaredLinkedPhysicalAccount(
+  mapping: ConfirmProcessingRequest["mappings"][number],
+  statement: { fileId: string; bank: string; agency: string; account: string },
+): boolean {
+  const declared = mapping.linkedPhysicalAccounts?.find((item) => item.statementFileId === statement.fileId);
+  return Boolean(declared && declared.role === "LINKED" && bankAccountsMatch(declared, statement));
 }
 
 
@@ -328,10 +412,73 @@ function safeMetric(event: string, fields: Record<string, string | number>): voi
 function isCompleted(status: ReconciliationSession["status"]): boolean { return status === "COMPLETED" || status === "COMPLETED_WITH_ISSUES"; }
 
 function processingQueue(redisUrl: string): Queue {
-  return new Queue("reconciliation", { connection: { url: redisUrl } });
+  return new Queue("reconciliation", {
+    connection: {
+      url: redisUrl,
+      connectTimeout: 5_000,
+      maxRetriesPerRequest: 1,
+      retryStrategy: () => null,
+    },
+  });
 }
 
-async function assertQueueCapacity(queue: Queue, maximum: number): Promise<void> {
-  const counts = await queue.getJobCounts("waiting", "delayed", "active");
+export async function assertWorkerAvailable(queue: Pick<Queue, "getWorkersCount">): Promise<void> {
+  let workerCount: number;
+  try {
+    workerCount = await withInfrastructureDeadline(queue.getWorkersCount());
+  } catch (error) {
+    throw processingInfrastructureError(error);
+  }
+  if (workerCount < 1) {
+    throw new PublicRuntimeError(
+      "WORKER_INDISPONIVEL",
+      "O serviço de processamento está indisponível. Inicie o worker e tente novamente.",
+      503,
+      15,
+    );
+  }
+}
+
+async function assertQueueCapacity(queue: Pick<Queue, "getJobCounts">, maximum: number): Promise<void> {
+  const counts = await withInfrastructureDeadline(queue.getJobCounts("waiting", "delayed", "active"));
   if ((counts.waiting ?? 0) + (counts.delayed ?? 0) >= maximum) throw new PublicRuntimeError("FILA_CHEIA", "A capacidade de processamento está temporariamente cheia. Tente novamente em alguns minutos.", 503);
+}
+
+function withInfrastructureDeadline<T>(operation: Promise<T>, timeoutMs = 5_000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Tempo limite ao acessar a fila de processamento.")), timeoutMs);
+    timeout.unref();
+    operation.then(
+      (value) => { clearTimeout(timeout); resolve(value); },
+      (error: unknown) => { clearTimeout(timeout); reject(error); },
+    );
+  });
+}
+
+function processingInfrastructureError(error: unknown): PublicRuntimeError {
+  if (error instanceof PublicRuntimeError) return error;
+  return new PublicRuntimeError(
+    "PROCESSAMENTO_INDISPONIVEL",
+    "Não foi possível acessar a fila de processamento. Verifique Redis e worker e tente novamente.",
+    503,
+    15,
+    { cause: error },
+  );
+}
+
+async function claimConfirmation(
+  sessions: SessionStore,
+  sessionId: string,
+  confirmation: ConfirmProcessingRequest,
+): Promise<"CLAIMED" | "SAME"> {
+  const claim = await sessions.claimConfirmation(sessionId, confirmation);
+  if (claim === "CONFLICT") throw new PublicRuntimeError("IDEMPOTENCY_CONFLICT", "A sessão já possui outra confirmação em processamento.", 409);
+  if (claim === "MISSING") throw new PublicRuntimeError("SESSAO_NAO_AUTORIZADA", "A sessão não está mais disponível.", 401);
+  return claim;
+}
+
+async function activeSession(sessions: SessionStore, sessionId: string): Promise<ReconciliationSession> {
+  const current = await sessions.get(sessionId);
+  if (!current || current.closed) throw new PublicRuntimeError("SESSAO_NAO_AUTORIZADA", "A sessão não está mais disponível.", 401);
+  return current;
 }

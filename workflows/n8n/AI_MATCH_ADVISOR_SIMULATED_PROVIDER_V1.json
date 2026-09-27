@@ -1,0 +1,41 @@
+{
+  "name": "AI_MATCH_ADVISOR_SIMULATED_PROVIDER_V1",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "start-node",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Provedor Simulado para Testes Locais e CI\nconst request = $input.item.json.request || $input.item.json;\nconst suggestions = (request.groups || []).map((group) => {\n  const anchorId = group.anchorId;\n  const candidates = (group.entries || []).filter(e => e.id !== anchorId);\n  const candidateIds = candidates.length > 0 ? [candidates[0].id] : [];\n  return {\n    groupId: group.groupId,\n    anchorId: anchorId,\n    candidateIds: candidateIds,\n    decision: candidateIds.length > 0 ? 'SUGGEST_MATCH' : 'NO_MATCH',\n    confidenceBps: 8500,\n    reasonCode: 'HISTORY_SIMILARITY',\n    explanationPtBr: 'Correspondência provável identificada por similaridade no provedor simulado.'\n  };\n});\n\nreturn {\n  json: {\n    contractVersion: '1.0',\n    requestId: request.requestId,\n    provider: 'simulated',\n    model: 'simulated-v1',\n    promptVersion: request.promptVersion || 'match-advisor-v1',\n    suggestions: suggestions\n  }\n};"
+      },
+      "id": "simulated-logic",
+      "name": "Lógica do Provedor Simulado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Lógica do Provedor Simulado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

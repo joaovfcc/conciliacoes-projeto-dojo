@@ -1,0 +1,77 @@
+{
+  "name": "AI_MATCH_ADVISOR_OPENAI_V1",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "start-node",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Você é um especialista em conciliação contábil e bancária. Analise os grupos de lançamentos recebidos e sugira correspondências prováveis baseando-se no histórico e número de documento. Retorne APENAS os IDs recebidos no payload. Responda em formato JSON estrito conforme o schema fornecido.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": JSON.stringify($json.request)\n    }\n  ],\n  \"response_format\": { \"type\": \"json_object\" },\n  \"temperature\": 0.0\n}"
+      },
+      "id": "openai-request",
+      "name": "OpenAI Chat Completion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalização da resposta da OpenAI para o contrato comum\nconst raw = $input.item.json;\nlet parsedContent = {};\ntry {\n  parsedContent = JSON.parse(raw.choices[0].message.content);\n} catch (e) {\n  throw new Error('Falha ao processar resposta JSON da OpenAI: ' + e.message);\n}\n\nreturn {\n  json: {\n    contractVersion: '1.0',\n    requestId: parsedContent.requestId || 'req-openai',\n    provider: 'openai',\n    model: 'gpt-4o-mini',\n    promptVersion: 'match-advisor-v1',\n    suggestions: parsedContent.suggestions || []\n  }\n};"
+      },
+      "id": "format-response",
+      "name": "Format OpenAI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Chat Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Completion": {
+      "main": [
+        [
+          {
+            "node": "Format OpenAI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

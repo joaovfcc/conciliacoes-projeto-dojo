@@ -58,6 +58,27 @@ Cada tarefa usa RED → GREEN → refatoração → gates → commit atômico. `
 - [ ] `T62` Executar lint, typecheck, builds, todas as suítes, coverage, mutation e paridade de release sem skips.
 - [ ] `T63` Atualizar matriz global e classificar o resultado como `CONCLUÍDO`, `BLOQUEADO_EXTERNAMENTE` ou `FALHA_TÉCNICA`.
 
+## Fase 8 — fechamento de confiabilidade
+
+- [x] `T70` Congelar a semântica valor-primeiro, corrigir os testes em conflito
+  e restaurar o gate unitário do core — `PDFCSV-011`, `PDFCSV-016`.
+- [x] `T71` Persistir e reaplicar o vínculo de várias contas físicas para o
+  escopo contábil lógico, com teste de conflito explícito — `PDFCSV-012`.
+- [x] `T72` Modelar grupos de ambiguidade com candidatos comparáveis e motivos
+  auditáveis — `PDFCSV-011`, `PDFCSV-013`.
+- [x] `T73` Implementar aprovação e rejeição auditável de sugestões 1:N e N:1,
+  mantendo-as fora dos totais até a decisão — `PDFCSV-013`.
+- [ ] `T74` Consolidar indicadores e evidência na interface e no XLSX,
+  definindo a política de visualização temporária de documentos — `PDFCSV-014`.
+- [ ] `T75` Re-inventariar o corpus com PDFs e XLSX, separar fontes e criar
+  manifestos privados de parsing e conciliação — `PDFCSV-015`.
+- [ ] `T76` Completar OCR, controles de saldo e homologação por família, do
+  Lote 1 ao Lote 6, sem promover adapter parcial — `PDFCSV-010`, `PDFCSV-016`.
+- [ ] `T77` Tornar cobertura, mutation testing e paridade de release gates reais
+  do CI — `PDFCSV-016`.
+- [ ] `T78` Criar RFC e piloto em modo sombra para IA assistiva; avaliar n8n
+  somente para orquestração posterior — `PDFCSV-017`.
+
 ## Matriz de cobertura de requisitos
 
 | Requisito | Tarefas |
@@ -72,3 +93,10 @@ Cada tarefa usa RED → GREEN → refatoração → gates → commit atômico. `
 | `PDFCSV-008` | T25, T52 |
 | `PDFCSV-009` | T50–T51 |
 | `PDFCSV-010` | T03–T05, T20–T26, T40–T45, T62–T63 |
+| `PDFCSV-011` | T70, T72 |
+| `PDFCSV-012` | T71 |
+| `PDFCSV-013` | T72–T73 |
+| `PDFCSV-014` | T74 |
+| `PDFCSV-015` | T75 |
+| `PDFCSV-016` | T70, T76–T77 |
+| `PDFCSV-017` | T78 |

@@ -55,4 +55,24 @@ describe("gate de conta bancária", () => {
     await expect(runtime.process(session, confirmation)).rejects.toMatchObject({ code: "BALANCE_INTEGRITY_FAILED" });
     expect(session.result).toBeUndefined();
   });
+
+  it("aceita vínculo manual quando a identidade do razão está incompleta e não há divergência", async () => {
+    const config = { ...loadRuntimeConfig({}), localStoragePath: ".test-storage" };
+    const runtime = new RuntimeServices(config, new MemorySessionStore(config), new LocalObjectStore(config), new InMemoryCompletedReconciliationRepository());
+    const partialPreflight: PreflightResult = {
+      ...preflight,
+      ledgerAccounts: [{ ...preflight.ledgerAccounts[0]!, bank: "", agency: "", bankAccount: "" }],
+      statements: [{ ...preflight.statements[0]!, bank: "BANCO NOVO", agency: "1234", account: "98765-0" }],
+    };
+    const partialStatement = { ...statement, bank: "BANCO NOVO", agency: "1234", bankAccount: "98765-0" };
+    const session: ReconciliationSession = {
+      id: "session-partial", tokenHash: "hash", clientKey: "client", actorId: "user", organizationId: "org", companyId: "company", createdAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T02:00:00.000Z", lastHeartbeatAt: "2026-01-01T00:00:00.000Z",
+      status: "AWAITING_CONFIRMATION", progress: 35, progressMessage: "ok", files: [], preflight: partialPreflight, ledgers: [ledger], statements: [partialStatement], closed: false,
+    };
+    await runtime.sessions.save(session);
+
+    await runtime.process(session, { ...confirmation, idempotencyKey: "mapping-partial" });
+
+    expect(session.result).toBeDefined();
+  });
 });

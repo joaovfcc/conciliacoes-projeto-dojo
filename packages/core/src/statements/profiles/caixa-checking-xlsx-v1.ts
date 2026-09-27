@@ -10,6 +10,7 @@ export const CAIXA_CHECKING_XLSX_V1: StatementLayoutProfile = {
 
   detection: {
     sheetNameAliases: ["caixa"],
+    institutionPatterns: ["caixa econômica", "caixa economica"],
     requiredHeaderGroups: [
       ["data", "data mov.", "data movimento", "dt movto", "dt balancete", "data balancete"],
       ["histórico", "descrição", "lançamento", "discriminação"],

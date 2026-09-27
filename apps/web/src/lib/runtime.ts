@@ -1,20 +1,39 @@
 import { createHash } from "node:crypto";
-import { PrismaCompletedReconciliationRepository, PrismaCompanyRepository, prisma, type ActorContext, type Company } from "@conciliacao/core";
-import { createObjectStore, createSessionStore, loadRuntimeConfig, PublicRuntimeError, RuntimeServices, publicSession, type RateLimiter, type SessionStore } from "@conciliacao/runtime";
+import {
+  PrismaCompletedReconciliationRepository,
+  PrismaCompanyRepository,
+  prisma,
+  type ActorContext,
+  type Company,
+  type ConfirmProcessingRequest,
+  type RegisteredAccountMapping,
+} from "@conciliacao/core";
+import { createObjectStore, createSessionStore, loadRuntimeConfig, PublicRuntimeError, RuntimeServices, publicSession, type RateLimiter, type ReconciliationSession, type SessionStore } from "@conciliacao/runtime";
 import type { NextRequest } from "next/server";
+import { z } from "zod";
 import { rateLimiter } from "./auth-runtime";
+import { enforceRegisteredAccountMappings } from "./registered-account-mappings";
 import { requireV2Actor, V2HttpError } from "./v2-auth";
+import { findLocalCompanyById, getLocalReconciliationRepository, getLocalRegisteredAccountMappings } from "./local-store";
 
 const globalRuntime = globalThis as typeof globalThis & { reconciliationRuntime?: RuntimeServices; sweepStarted?: boolean };
 
 export function runtime(): RuntimeServices {
   if (!globalRuntime.reconciliationRuntime) {
     const config = loadRuntimeConfig();
+    const isLocal = process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL;
+    if (isLocal) {
+      delete config.redisUrl;
+    }
+    const historyRepo = isLocal
+      ? getLocalReconciliationRepository()
+      : new PrismaCompletedReconciliationRepository(prisma);
+
     globalRuntime.reconciliationRuntime = new RuntimeServices(
       config,
       createSessionStore(config),
       createObjectStore(config),
-      new PrismaCompletedReconciliationRepository(prisma),
+      historyRepo,
     );
   }
   if (!globalRuntime.sweepStarted) {
@@ -90,13 +109,17 @@ export async function createReconciliationSession(
 
 export async function createAuthenticatedSession(request: NextRequest): Promise<Response> {
   const services = runtime();
+  const isLocal = process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL;
   return createReconciliationSession(request, {
     resolveActor: requireV2Actor,
     sessions: services.sessions,
     rateLimiter,
     maxSessionsPerHour: services.config.maxSessionsPerHour,
     clientKey,
-    findCompany: (companyId) => new PrismaCompanyRepository(prisma).findById(companyId),
+    findCompany: (companyId) =>
+      isLocal
+        ? Promise.resolve(findLocalCompanyById(companyId))
+        : new PrismaCompanyRepository(prisma).findById(companyId),
   });
 }
 
@@ -115,9 +138,65 @@ export function jsonError(error: unknown): Response {
   if (error instanceof V2HttpError) {
     return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status });
   }
+  if (error instanceof z.ZodError) {
+    const firstIssue = error.issues[0]?.message || "Dados de entrada inválidos";
+    return Response.json({ error: { code: "INVALID_REQUEST", message: firstIssue, issues: error.issues } }, { status: 400 });
+  }
   console.error(error);
   console.error(JSON.stringify({ event: "request_failed", code: "INTERNAL_ERROR", timestamp: new Date().toISOString() }));
   return Response.json({ error: { code: "INTERNAL_ERROR", message: "Não foi possível concluir a operação. Tente novamente." } }, { status: 500 });
+}
+
+/**
+ * Expõe para a pré-análise somente os vínculos ativos do cadastro da empresa.
+ * O vínculo é uma sugestão de escopo lógico, não uma autorização para ignorar
+ * divergências na confirmação enviada pelo usuário.
+ */
+export async function withRegisteredAccountMappings(session: ReconciliationSession): Promise<ReconciliationSession> {
+  if (!session.preflight) return session;
+  const registeredAccountMappings = await activeRegisteredAccountMappings(session.companyId);
+  return {
+    ...session,
+    preflight: { ...session.preflight, registeredAccountMappings },
+  };
+}
+
+export async function applyRegisteredAccountMappings(
+  session: ReconciliationSession,
+  input: ConfirmProcessingRequest,
+): Promise<ConfirmProcessingRequest> {
+  if (!session.preflight) return input;
+  return enforceRegisteredAccountMappings(
+    session.preflight,
+    input,
+    await activeRegisteredAccountMappings(session.companyId),
+  );
+}
+
+async function activeRegisteredAccountMappings(companyId: string): Promise<RegisteredAccountMapping[]> {
+  const isLocal = process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL;
+  if (isLocal) {
+    return getLocalRegisteredAccountMappings(companyId);
+  }
+  const mappings = await prisma.bankLedgerMapping.findMany({
+    where: {
+      companyId,
+      status: "ACTIVE",
+      bankAccount: { status: "ACTIVE" },
+      ledgerAccount: { status: "ACTIVE" },
+    },
+    include: { bankAccount: true, ledgerAccount: true },
+  });
+  return mappings.map((mapping) => ({
+    ...(mapping.bankAccount.bankCode || mapping.bankAccount.bankName
+      ? { bank: mapping.bankAccount.bankCode ?? mapping.bankAccount.bankName! }
+      : {}),
+    ...(mapping.bankAccount.agency ? { agency: mapping.bankAccount.agency } : {}),
+    ...(mapping.bankAccount.accountNumber
+      ? { account: `${mapping.bankAccount.accountNumber}${mapping.bankAccount.accountDigit ? `-${mapping.bankAccount.accountDigit}` : ""}` }
+      : {}),
+    ledgerAccount: mapping.ledgerAccount.code,
+  }));
 }
 
 export { publicSession };

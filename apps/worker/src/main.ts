@@ -27,7 +27,7 @@ const sweepTimer = setInterval(() => {
 sweepTimer.unref();
 
 worker.on("completed", (job) => console.info(JSON.stringify({ event: "job_completed", jobId: job.id, timestamp: new Date().toISOString() })));
-worker.on("failed", (job) => console.error(JSON.stringify({ event: "job_failed", jobId: job?.id, timestamp: new Date().toISOString() })));
+worker.on("failed", (job, error) => console.error(JSON.stringify({ event: "job_failed", jobId: job?.id, reason: job?.failedReason, error: error instanceof Error ? { message: error.message, stack: error.stack } : error, timestamp: new Date().toISOString() })));
 
 async function shutdown(): Promise<void> {
   clearInterval(sweepTimer);

@@ -1,9 +1,9 @@
 import { Argon2PasswordHasher, AuthService, PrismaAuthRepository, prisma } from "@conciliacao/core";
-import { RedisRateLimiter } from "@conciliacao/runtime";
+import { MemoryRateLimiter, RedisRateLimiter, type RateLimiter } from "@conciliacao/runtime";
 import { createAuthHandlers } from "./auth-api";
 import { signAccessToken, verifyAccessToken } from "./auth-jwt";
 
-const globalAuth = globalThis as typeof globalThis & { authService?: AuthService; rateLimiter?: RedisRateLimiter };
+const globalAuth = globalThis as typeof globalThis & { authService?: AuthService; rateLimiter?: RateLimiter };
 
 export function authService(): AuthService {
   globalAuth.authService ??= new AuthService(
@@ -22,11 +22,16 @@ export function authHandlers() {
     auth: authService(),
     signAccess: signAccessToken,
     verifyAccess: verifyAccessToken,
-    rateLimiter: rateLimiter(),
+    rateLimiter,
   });
 }
 
-export function rateLimiter(): RedisRateLimiter {
+export function rateLimiter(): RateLimiter {
+  const isLocal = process.env.LOCAL_MODE === "true" || !process.env.REDIS_URL;
+  if (isLocal) {
+    globalAuth.rateLimiter ??= new MemoryRateLimiter();
+    return globalAuth.rateLimiter;
+  }
   const redisUrl = process.env.REDIS_URL;
   const keySecret = process.env.RATE_LIMIT_KEY_SECRET;
   if (!redisUrl || !keySecret) throw new Error("REDIS_URL e RATE_LIMIT_KEY_SECRET são obrigatórios para autenticação");

@@ -6,7 +6,7 @@ const scriptPolicy = process.env.NODE_ENV === "development"
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  serverExternalPackages: ["bullmq", "ioredis", "pdfjs-dist", "exceljs"],
+  serverExternalPackages: ["bullmq", "ioredis", "pdfjs-dist", "exceljs", "@node-rs/argon2", "@prisma/client"],
   transpilePackages: ["@conciliacao/core", "@conciliacao/runtime"],
   async headers() {
     return [{

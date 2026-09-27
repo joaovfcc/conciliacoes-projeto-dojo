@@ -85,7 +85,7 @@ describe('authenticated request refresh', () => {
     render(<AuthenticatedApp />);
     fireEvent.click(await screen.findByRole('button', { name: 'Sair' }));
 
-    expect(await screen.findByText('Entre para conciliar')).toBeInTheDocument();
+    expect(await screen.findByText('Acesso ao Concilia')).toBeInTheDocument();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({
       headers: { Authorization: 'Bearer renewed-token' },
     })));
@@ -117,7 +117,7 @@ describe('authenticated request refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sair' }));
     releaseRefresh?.();
 
-    expect(await screen.findByText('Entre para conciliar')).toBeInTheDocument();
+    expect(await screen.findByText('Acesso ao Concilia')).toBeInTheDocument();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.anything()));
     expect(screen.queryByRole('button', { name: 'Testar concorrência' })).not.toBeInTheDocument();
   });
@@ -144,7 +144,7 @@ describe('authenticated request refresh', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Testar capacidade' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/capability', expect.anything()));
     fireEvent.click(screen.getByRole('button', { name: 'Sair' }));
-    expect(await screen.findByText('Entre para conciliar')).toBeInTheDocument();
+    expect(await screen.findByText('Acesso ao Concilia')).toBeInTheDocument();
     releaseRequest?.();
 
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => input === '/capability')).toHaveLength(1));

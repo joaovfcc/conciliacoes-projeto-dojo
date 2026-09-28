@@ -12,7 +12,6 @@ import {
   type ConfigurationRole,
 } from "@conciliacao/core";
 
-import { authService } from "./auth-runtime";
 import { verifyAccessToken } from "./auth-jwt";
 import type { AccessTokenClaims } from "./auth-jwt";
 import type { AuthenticatedUser } from "@conciliacao/core";
@@ -28,12 +27,9 @@ export async function requireV2Actor(
   request: NextRequest,
   companyId?: string,
   roles: readonly CompanyRole[] = ["PREPARER", "REVIEWER", "ADMIN", "AUDITOR"],
-  dependencies: {
+  dependencies?: {
     verifyAccess(token: string): Promise<AccessTokenClaims>;
     resolveSession(sessionId: string, userId: string): Promise<AuthenticatedUser | null>;
-  } = {
-    verifyAccess: verifyAccessToken,
-    resolveSession: (sessionId, userId) => authService().resolveSession(sessionId, userId),
   },
 ): Promise<ActorContext> {
   if (process.env.LOCAL_MODE === "true" && process.env.NODE_ENV !== "test") {
@@ -45,15 +41,22 @@ export async function requireV2Actor(
       }) as unknown as Record<string, CompanyRole[]>,
     };
   }
+  const deps = dependencies ?? {
+    verifyAccess: verifyAccessToken,
+    resolveSession: async (sessionId: string, userId: string) => {
+      const { authService } = await import("./auth-runtime");
+      return authService().resolveSession(sessionId, userId);
+    },
+  };
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw unauthorized();
   let claims;
   try {
-    claims = await dependencies.verifyAccess(authorization.slice(7));
+    claims = await deps.verifyAccess(authorization.slice(7));
   } catch {
     throw unauthorized();
   }
-  const user = await dependencies.resolveSession(claims.sessionId, claims.userId);
+  const user = await deps.resolveSession(claims.sessionId, claims.userId);
   if (!user) throw unauthorized("SESSION_INVALID", "Sessão inválida ou expirada");
   if (user.passwordChangeRequired) {
     throw new V2HttpError(403, "PASSWORD_CHANGE_REQUIRED", "Troque a senha temporária antes de continuar");

@@ -1,5 +1,4 @@
 import type { NextRequest } from "next/server";
-import { authHandlers } from "@/lib/auth-runtime";
 import { listLocalCompanies } from "@/lib/local-store";
 
 export async function POST(request: NextRequest) {
@@ -28,6 +27,7 @@ export async function POST(request: NextRequest) {
       { headers: { "Cache-Control": "no-store" } },
     );
   }
+  const { authHandlers } = await import("@/lib/auth-runtime");
   return authHandlers().login(request);
 }
 

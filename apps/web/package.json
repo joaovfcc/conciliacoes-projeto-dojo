@@ -16,6 +16,7 @@
   "dependencies": {
     "@conciliacao/core": "workspace:*",
     "@conciliacao/runtime": "workspace:*",
+    "@prisma/client": "^5.22.0",
     "jose": "^6.2.8",
     "next": "^16.0.1",
     "react": "^19.2.0",

@@ -1,4 +1,10 @@
-import { bankAccountsMatch, type ConfirmProcessingRequest, type PreflightResult, type RegisteredAccountMapping } from "@conciliacao/core";
+import {
+  bankAccountsMatch,
+  ledgerAccountsMatch,
+  type ConfirmProcessingRequest,
+  type PreflightResult,
+  type RegisteredAccountMapping,
+} from "@conciliacao/core";
 import { PublicRuntimeError } from "@conciliacao/runtime";
 
 /**
@@ -33,7 +39,7 @@ export function enforceRegisteredAccountMappings(
           );
         }
         const registeredLedger = [...registeredLedgers][0]!;
-        if (registeredLedger !== mapping.ledgerAccount) {
+        if (!ledgerAccountsMatch(registeredLedger, mapping.ledgerAccount)) {
           throw new PublicRuntimeError(
             "PERSISTED_BANK_ACCOUNT_MISMATCH",
             "A conta bancária do extrato está vinculada no cadastro a outra conta contábil. Revise o vínculo cadastrado antes de conciliar.",

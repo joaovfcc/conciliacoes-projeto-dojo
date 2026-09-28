@@ -3,7 +3,7 @@ import type { ExtractedTabularSheet } from "./tabular-types.js";
 import type { StatementLayoutProfile } from "../statements/statement-types.js";
 
 export interface GeminiLayoutDetectionResult {
-  source: "GEMINI_AI" | "CACHE";
+  source: "DEEPSEEK_AI" | "GEMINI_AI" | "CACHE";
   confidence: "HIGH" | "MEDIUM" | "LOW";
   headerRowIndex: number;
   columns: {
@@ -31,7 +31,9 @@ export interface GeminiLayoutDetectionResult {
   };
 }
 
-// In-memory cache to prevent redundant Gemini API calls for identical layouts
+export type LLMLayoutDetectionResult = GeminiLayoutDetectionResult;
+
+// In-memory cache to prevent redundant LLM API calls for identical layouts
 const layoutCache = new Map<string, GeminiLayoutDetectionResult>();
 
 /**
@@ -62,15 +64,178 @@ function formatGridForPrompt(sheet: ExtractedTabularSheet, maxRows = 20): string
   return lines.join("\n");
 }
 
+function parseLlmJsonOutput(
+  rawText: string,
+  source: "DEEPSEEK_AI" | "GEMINI_AI",
+): GeminiLayoutDetectionResult | null {
+  try {
+    const cleaned = rawText
+      .trim()
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+
+    const parsed = JSON.parse(cleaned);
+
+    if (
+      typeof parsed.headerRowIndex !== "number" ||
+      typeof parsed.columns?.date !== "number" ||
+      typeof parsed.columns?.description !== "number"
+    ) {
+      return null;
+    }
+
+    return {
+      source,
+      confidence: parsed.confidence || "MEDIUM",
+      headerRowIndex: parsed.headerRowIndex,
+      columns: {
+        date: parsed.columns.date,
+        description: parsed.columns.description,
+        ...(parsed.columns.descriptionComplement !== null && parsed.columns.descriptionComplement !== undefined ? { descriptionComplement: parsed.columns.descriptionComplement } : {}),
+        ...(parsed.columns.document !== null && parsed.columns.document !== undefined ? { document: parsed.columns.document } : {}),
+        ...(parsed.columns.amount !== null && parsed.columns.amount !== undefined ? { amount: parsed.columns.amount } : {}),
+        ...(parsed.columns.debit !== null && parsed.columns.debit !== undefined ? { debit: parsed.columns.debit } : {}),
+        ...(parsed.columns.credit !== null && parsed.columns.credit !== undefined ? { credit: parsed.columns.credit } : {}),
+        ...(parsed.columns.balance !== null && parsed.columns.balance !== undefined ? { balance: parsed.columns.balance } : {}),
+        ...(parsed.columns.dcIndicator !== null && parsed.columns.dcIndicator !== undefined ? { dcIndicator: parsed.columns.dcIndicator } : {}),
+        ...(parsed.columns.account !== null && parsed.columns.account !== undefined ? { account: parsed.columns.account } : {}),
+      },
+      rules: {
+        valueMode: parsed.rules?.valueMode || "SINGLE_SIGNED",
+        accountIsBlockHeader: !!parsed.rules?.accountIsBlockHeader,
+        inheritDateIfEmpty: !!parsed.rules?.inheritDateIfEmpty,
+      },
+      metadata: {
+        ...(parsed.metadata?.bank ? { bank: String(parsed.metadata.bank).trim() } : {}),
+        ...(parsed.metadata?.agency ? { agency: String(parsed.metadata.agency).trim() } : {}),
+        ...(parsed.metadata?.account ? { account: String(parsed.metadata.account).trim() } : {}),
+        ...(parsed.metadata?.ledgerAccount ? { ledgerAccount: String(parsed.metadata.ledgerAccount).trim() } : {}),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function callDeepSeek(
+  prompt: string,
+  apiKey: string,
+): Promise<GeminiLayoutDetectionResult | null> {
+  const model = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+  const url = "https://api.deepseek.com/chat/completions";
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: "Você é um perito contábil brasileiro sênior e arquiteto de sistemas para conciliação contábil. Sua resposta DEVE ser estritamente um objeto JSON válido, sem texto introdutório e sem blocos markdown.",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`[DeepSeekLayoutDetector] API returned status ${response.status}: ${await response.text()}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return null;
+
+    return parseLlmJsonOutput(content, "DEEPSEEK_AI");
+  } catch (error) {
+    console.warn(`[DeepSeekLayoutDetector] Error invoking DeepSeek:`, error);
+    return null;
+  }
+}
+
+async function callGemini(
+  prompt: string,
+  apiKey: string,
+): Promise<GeminiLayoutDetectionResult | null> {
+  const candidateModels = [
+    process.env.GEMINI_MODEL,
+    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+  ].filter((m): m is string => Boolean(m));
+
+  let lastError = "";
+
+  for (const model of candidateModels) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        lastError = `Model ${model} failed with status ${response.status}: ${await response.text()}`;
+        continue;
+      }
+
+      const data = await response.json();
+      const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!candidateText) {
+        continue;
+      }
+
+      const parsed = parseLlmJsonOutput(candidateText, "GEMINI_AI");
+      if (parsed) return parsed;
+    } catch (error) {
+      lastError = `Model ${model} exception: ${String(error)}`;
+    }
+  }
+
+  console.warn(`[GeminiLayoutDetector] All candidate models failed. Last error: ${lastError}`);
+  return null;
+}
+
 /**
- * Calls Google Gemini Flash via native fetch to detect table schema, header row, and column roles.
+ * Calls an LLM (DeepSeek or Google Gemini) to detect table schema, header row, and column roles.
  */
-export async function detectLayoutWithGemini(
+export async function detectLayoutWithLLM(
   sheet: ExtractedTabularSheet,
   fileKind: "STATEMENT" | "LEDGER" = "STATEMENT",
 ): Promise<GeminiLayoutDetectionResult | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+
+  if (!deepseekApiKey && !geminiApiKey) {
     return null;
   }
 
@@ -139,95 +304,33 @@ Responda ESTRITAMENTE em formato JSON com o seguinte schema:
   }
 }`;
 
-  const candidateModels = [
-    process.env.GEMINI_MODEL,
-    "gemini-flash-latest",
-    "gemini-2.5-flash-lite",
-    "gemini-3.8-flash",
-    "gemini-3.1-flash-lite",
-  ].filter((m): m is string => Boolean(m));
+  let result: GeminiLayoutDetectionResult | null = null;
 
-  let lastError = "";
-
-  for (const model of candidateModels) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: prompt }],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.1,
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        lastError = `Model ${model} failed with status ${response.status}: ${await response.text()}`;
-        continue;
-      }
-
-      const data = await response.json();
-      const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!candidateText) {
-        continue;
-      }
-
-      const parsed = JSON.parse(candidateText);
-
-      // Sanity check: Ensure required fields exist and indices are valid
-      if (typeof parsed.headerRowIndex !== "number" || typeof parsed.columns?.date !== "number" || typeof parsed.columns?.description !== "number") {
-        continue;
-      }
-
-      const result: GeminiLayoutDetectionResult = {
-        source: "GEMINI_AI",
-        confidence: parsed.confidence || "MEDIUM",
-        headerRowIndex: parsed.headerRowIndex,
-        columns: {
-          date: parsed.columns.date,
-          description: parsed.columns.description,
-          ...(parsed.columns.descriptionComplement !== null && parsed.columns.descriptionComplement !== undefined ? { descriptionComplement: parsed.columns.descriptionComplement } : {}),
-          ...(parsed.columns.document !== null && parsed.columns.document !== undefined ? { document: parsed.columns.document } : {}),
-          ...(parsed.columns.amount !== null && parsed.columns.amount !== undefined ? { amount: parsed.columns.amount } : {}),
-          ...(parsed.columns.debit !== null && parsed.columns.debit !== undefined ? { debit: parsed.columns.debit } : {}),
-          ...(parsed.columns.credit !== null && parsed.columns.credit !== undefined ? { credit: parsed.columns.credit } : {}),
-          ...(parsed.columns.balance !== null && parsed.columns.balance !== undefined ? { balance: parsed.columns.balance } : {}),
-          ...(parsed.columns.dcIndicator !== null && parsed.columns.dcIndicator !== undefined ? { dcIndicator: parsed.columns.dcIndicator } : {}),
-          ...(parsed.columns.account !== null && parsed.columns.account !== undefined ? { account: parsed.columns.account } : {}),
-        },
-        rules: {
-          valueMode: parsed.rules?.valueMode || "SINGLE_SIGNED",
-          accountIsBlockHeader: !!parsed.rules?.accountIsBlockHeader,
-          inheritDateIfEmpty: !!parsed.rules?.inheritDateIfEmpty,
-        },
-        metadata: {
-          ...(parsed.metadata?.bank ? { bank: String(parsed.metadata.bank).trim() } : {}),
-          ...(parsed.metadata?.agency ? { agency: String(parsed.metadata.agency).trim() } : {}),
-          ...(parsed.metadata?.account ? { account: String(parsed.metadata.account).trim() } : {}),
-          ...(parsed.metadata?.ledgerAccount ? { ledgerAccount: String(parsed.metadata.ledgerAccount).trim() } : {}),
-        },
-      };
-
-      layoutCache.set(fingerprint, result);
-      return result;
-    } catch (error) {
-      lastError = `Model ${model} exception: ${String(error)}`;
-    }
+  // Try DeepSeek first if configured
+  if (deepseekApiKey) {
+    result = await callDeepSeek(prompt, deepseekApiKey);
   }
 
-  console.warn(`[GeminiLayoutDetector] All candidate models failed. Last error: ${lastError}`);
-  return null;
+  // Fallback to Gemini if DeepSeek was unavailable or failed
+  if (!result && geminiApiKey) {
+    result = await callGemini(prompt, geminiApiKey);
+  }
+
+  if (result) {
+    layoutCache.set(fingerprint, result);
+  }
+
+  return result;
+}
+
+/**
+ * Backward compatibility alias for detectLayoutWithLLM.
+ */
+export async function detectLayoutWithGemini(
+  sheet: ExtractedTabularSheet,
+  fileKind: "STATEMENT" | "LEDGER" = "STATEMENT",
+): Promise<GeminiLayoutDetectionResult | null> {
+  return detectLayoutWithLLM(sheet, fileKind);
 }
 
 /**

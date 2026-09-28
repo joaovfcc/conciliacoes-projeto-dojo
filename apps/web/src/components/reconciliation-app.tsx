@@ -11,7 +11,7 @@ import type {
   SignProfile,
   StatementRecord,
 } from "@conciliacao/core";
-import { bankAccountsMatch, compareBankAccountIdentities } from "@conciliacao/core/normalization";
+import { bankAccountsMatch, compareBankAccountIdentities, ledgerAccountsMatch } from "@conciliacao/core/normalization";
 import {
   bankLabel,
   documentKindLabel,
@@ -218,8 +218,14 @@ export function ReconciliationApp({
         const { session: current } = await readResponse<{ session: PublicSession }>(response);
         pollingFailuresRef.current = 0;
         setSession(current);
-        if (stage === "PREFLIGHT" && current.preflight) showPreflight(current.preflight);
-        else if (current.result) {
+        if (stage === "PREFLIGHT") {
+          if (current.preflight) {
+            showPreflight(current.preflight);
+          } else {
+            if (current.progressMessage) setPreflightStatusText(current.progressMessage);
+            if (current.progress) setPreflightProgress((prev) => Math.max(prev, current.progress));
+          }
+        } else if (current.result) {
           confirmationAttemptRef.current = null;
           processingDeadlineRef.current = null;
           setResult(current.result);
@@ -362,7 +368,13 @@ export function ReconciliationApp({
       const body = await readResponse<{ session: PublicSession }>(response);
       setSession(body.session);
       const detected = body.session.preflight;
-      if (detected) showPreflight(detected);
+      if (detected) {
+        showPreflight(detected);
+      } else if (body.session.status === "QUEUED" || body.session.status === "PREFLIGHT") {
+        setPreflightActiveStep("PARSING");
+        setPreflightProgress((prev) => Math.max(prev, body.session.progress ?? 80));
+        setPreflightStatusText(body.session.progressMessage || "Identificando estrutura, leiautes e contas...");
+      }
     } catch (exception) {
       if (activeCredential) {
         try {
@@ -377,8 +389,8 @@ export function ReconciliationApp({
               showPreflight(checkData.session.preflight);
               return;
             }
-            if (checkData.session?.status === "PREFLIGHT") {
-              setPreflightStatusText("A leitura dos arquivos continua em andamento no servidor. Aguarde...");
+            if (["PREFLIGHT", "QUEUED", "EXTRACTING", "OCR_PROCESSING"].includes(checkData.session?.status ?? "")) {
+              setPreflightStatusText(checkData.session?.progressMessage || "A leitura dos arquivos continua em andamento no servidor. Aguarde...");
               return;
             }
           }
@@ -460,6 +472,7 @@ export function ReconciliationApp({
               return;
             }
             if (["RECONCILING", "VALIDATING", "EXTRACTING", "OCR_PROCESSING", "QUEUED"].includes(checkData.session?.status ?? "")) {
+              setStage("PROCESSING");
               return;
             }
           }
@@ -2743,14 +2756,16 @@ function signProfileForLedger(
 export function proposeStatementMappings(preflight: PreflightResult): Record<string, string> {
   const mappings: Record<string, string> = {};
   for (const statement of preflight.statements.filter((item) => item.reconciliationEligible)) {
-    const registeredAccounts = new Set(
-      (preflight.registeredAccountMappings ?? [])
-        .filter((mapping) => bankAccountsMatch(mapping, statement))
-        .map((mapping) => mapping.ledgerAccount)
-        .filter((account) => preflight.ledgerAccounts.some((ledgerAccount) => ledgerAccount.account === account)),
+    const matchingRegisteredLedgers = (preflight.registeredAccountMappings ?? [])
+      .filter((mapping) => bankAccountsMatch(mapping, statement))
+      .map((mapping) => mapping.ledgerAccount);
+
+    const matchedLedgerAccounts = preflight.ledgerAccounts.filter((ledgerAccount) =>
+      matchingRegisteredLedgers.some((registered) => ledgerAccountsMatch(ledgerAccount.account, registered)),
     );
-    if (registeredAccounts.size === 1) {
-      mappings[statement.fileId] = [...registeredAccounts][0]!;
+
+    if (matchedLedgerAccounts.length === 1) {
+      mappings[statement.fileId] = matchedLedgerAccounts[0]!.account;
       continue;
     }
     const compatibleAccounts = preflight.ledgerAccounts.filter((ledgerAccount) =>
@@ -2900,7 +2915,7 @@ function fallbackHttpMessage(status: number): string {
   return "Não foi possível concluir a operação no momento. Por favor, tente novamente.";
 }
 
-function messageOf(value: unknown): string {
+export function messageOf(value: unknown): string {
   if (value instanceof TypeError)
     return "Não foi possível conectar ao servidor local. Verifique se a aplicação está em execução e tente novamente.";
   if (value instanceof Error) {

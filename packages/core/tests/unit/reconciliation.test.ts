@@ -349,4 +349,80 @@ describe("fachada de reconciliação", () => {
     expect(() => reconcile([ledger()], [statement()], { ...confirmation, dateToleranceDays: 4 }))
       .toThrow(/entre 0 e 3 dias/);
   });
+
+  it("concilia automaticamente lançamentos de mesmo valor quando as datas coincidem 1:1, sem cair em ambiguidade", () => {
+    const output = reconcile(
+      [
+        ledger({ id: "l-dia-05", date: "2026-01-05", value: "500.00", history: "PGTO KALUNGA" }),
+        ledger({ id: "l-dia-20", date: "2026-01-20", value: "500.00", history: "PGTO POSTO SHELL", evidence: { ...evidence, line: 8 } }),
+      ],
+      [
+        statement({ id: "s-dia-05", date: "2026-01-05", value: "-500.00", history: "KALUNGA COMERCIO" }),
+        statement({ id: "s-dia-20", date: "2026-01-20", value: "-500.00", history: "POSTO SHELL BRASIL", evidence: { ...evidence, fileId: "statement-file", page: 4 } }),
+      ],
+      confirmation,
+    );
+
+    expect(output.results).toHaveLength(2);
+    expect(output.results.every((item) => item.status === "AUTO_MATCH_EXACT")).toBe(true);
+    expect(output.results.find((item) => item.ledger?.id === "l-dia-05")?.statement?.id).toBe("s-dia-05");
+    expect(output.results.find((item) => item.ledger?.id === "l-dia-20")?.statement?.id).toBe("s-dia-20");
+    expect(output.results.some((item) => item.status === "AMBIGUOUS_MATCH")).toBe(false);
+  });
+
+  it("concilia automaticamente lançamentos de mesmo valor na mesma data quando fornecedores distintos identificam cada par", () => {
+    const output = reconcile(
+      [
+        ledger({ id: "l-kalunga", date: "2026-01-05", value: "500.00", history: "PGTO KALUNGA COMERCIO" }),
+        ledger({ id: "l-shell", date: "2026-01-05", value: "500.00", history: "PGTO POSTO SHELL", evidence: { ...evidence, line: 8 } }),
+      ],
+      [
+        statement({ id: "s-kalunga", date: "2026-01-05", value: "-500.00", history: "KALUNGA COMERCIO" }),
+        statement({ id: "s-shell", date: "2026-01-05", value: "-500.00", history: "POSTO SHELL BRASIL", evidence: { ...evidence, fileId: "statement-file", page: 4 } }),
+      ],
+      confirmation,
+    );
+
+    expect(output.results).toHaveLength(2);
+    expect(output.results.every((item) => item.status === "AUTO_MATCH_EXACT")).toBe(true);
+    expect(output.results.find((item) => item.ledger?.id === "l-kalunga")?.statement?.id).toBe("s-kalunga");
+    expect(output.results.find((item) => item.ledger?.id === "l-shell")?.statement?.id).toBe("s-shell");
+    expect(output.results.some((item) => item.status === "AMBIGUOUS_MATCH")).toBe(false);
+  });
+
+  it("concilia o par de mesma data e mantém lançamento avulso em outra data como pendência em vez de ambiguidade falsa", () => {
+    const output = reconcile(
+      [
+        ledger({ id: "l-dia-05", date: "2026-01-05", value: "500.00", history: "PGTO KALUNGA" }),
+        ledger({ id: "l-dia-20", date: "2026-01-20", value: "500.00", history: "PGTO FORNECEDOR AVULSO", evidence: { ...evidence, line: 8 } }),
+      ],
+      [
+        statement({ id: "s-dia-05", date: "2026-01-05", value: "-500.00", history: "KALUNGA COMERCIO" }),
+      ],
+      confirmation,
+    );
+
+    expect(output.results).toHaveLength(2);
+    expect(output.results).toContainEqual(expect.objectContaining({
+      status: "AUTO_MATCH_EXACT",
+      ledger: expect.objectContaining({ id: "l-dia-05" }),
+      statement: expect.objectContaining({ id: "s-dia-05" }),
+    }));
+    expect(output.results).toContainEqual(expect.objectContaining({
+      status: "LEDGER_WITHOUT_STATEMENT",
+      ledger: expect.objectContaining({ id: "l-dia-20" }),
+    }));
+    expect(output.results.some((item) => item.status === "AMBIGUOUS_MATCH")).toBe(false);
+  });
+
+  it("bloqueia conciliação automática na mesma data quando os números de documento são divergentes", () => {
+    const output = reconcile(
+      [ledger({ id: "l-doc-1", date: "2026-01-05", value: "500.00", document: "DOC1111", history: "PGTO FORNECEDOR" })],
+      [statement({ id: "s-doc-2", date: "2026-01-05", value: "-500.00", document: "DOC2222", history: "PGTO FORNECEDOR" })],
+      confirmation,
+    );
+
+    expect(output.results.some((item) => item.status.startsWith("AUTO_MATCH"))).toBe(false);
+    expect(output.results.map((item) => item.status).sort()).toEqual(["LEDGER_WITHOUT_STATEMENT", "STATEMENT_WITHOUT_LEDGER"]);
+  });
 });

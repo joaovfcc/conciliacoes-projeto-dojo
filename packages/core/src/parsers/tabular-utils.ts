@@ -166,8 +166,10 @@ export async function tabularRows(
 
 export function isLedgerStructureRow(values: Record<string, unknown>): boolean {
   const date = normalizeAscii(String(values.DATE ?? "")).trim().toUpperCase();
-  const history = normalizeAscii(String(values.HISTORY ?? "")).trim().toUpperCase();
-  const fullText = `${date} ${history}`.trim();
+  const rowTokens = Object.values(values)
+    .map((v) => normalizeAscii(String(v ?? "")).trim().toUpperCase())
+    .filter(Boolean);
+  const fullText = rowTokens.join(" ");
 
   // Repeated header
   if (date === "DATA" || date === "DT" || date === "DT_LANCAMENTO") return true;
@@ -187,5 +189,19 @@ export function isLedgerStructureRow(values: Record<string, unknown>): boolean {
     "DO TRANSPORTE",
   ];
 
-  return structuralPatterns.some((pattern) => fullText.includes(pattern));
+  if (structuralPatterns.some((pattern) => fullText.includes(pattern))) {
+    return true;
+  }
+
+  // Regex para rodapés e totalizadores espaçados típicos do Protheus / ERPs legados:
+  // "T o t a i s   d a   C o n t a   ==>", "T O T A L   G E R A L   ==>", "S A L D O   A T U A L"
+  const spacedPatterns = [
+    /\bT\s*O\s*T\s*A\s*I\s*S\s*(?:D\s*A\s*C\s*O\s*N\s*T\s*A)?/i,
+    /\bT\s*O\s*T\s*A\s*L\s*G\s*E\s*R\s*A\s*L/i,
+    /\bS\s*A\s*L\s*D\s*O\s*A\s*T\s*U\s*A\s*L/i,
+    /\bS\s*A\s*L\s*D\s*O\s*A\s*N\s*T\s*E\s*R\s*I\s*O\s*R/i,
+    /={2,}>?/,
+  ];
+
+  return spacedPatterns.some((pattern) => pattern.test(fullText));
 }

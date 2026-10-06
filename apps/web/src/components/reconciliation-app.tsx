@@ -799,65 +799,82 @@ export function ReconciliationApp({
   }
 
   async function handleBidirectionalMatch(
-    selectedStatementId: string,
-    selectedLedgerId: string,
+    selectedStatementIds: string[],
+    selectedLedgerIds: string[],
     justification?: string,
   ): Promise<void> {
-    if (!result) return;
+    if (!result || selectedStatementIds.length === 0 || selectedLedgerIds.length === 0) return;
 
-    let foundStatement: StatementRecord | undefined;
-    let foundLedger: LedgerRecord | undefined;
+    const stmtIdSet = new Set(selectedStatementIds);
+    const ledgIdSet = new Set(selectedLedgerIds);
+
+    const foundStatements: StatementRecord[] = [];
+    const foundLedgers: LedgerRecord[] = [];
+    const seenS = new Set<string>();
+    const seenL = new Set<string>();
 
     for (const r of result.results) {
-      if (!foundStatement) {
-        if (r.statement?.id === selectedStatementId) {
-          foundStatement = r.statement;
-        } else if (r.statements) {
-          const s = r.statements.find((item) => item.id === selectedStatementId);
-          if (s) foundStatement = s;
+      const rowStmts = r.statements ?? (r.statement ? [r.statement] : []);
+      for (const s of rowStmts) {
+        if (stmtIdSet.has(s.id) && !seenS.has(s.id)) {
+          seenS.add(s.id);
+          foundStatements.push(s);
         }
       }
-      if (!foundLedger) {
-        if (r.ledger?.id === selectedLedgerId) {
-          foundLedger = r.ledger;
-        } else if (r.ledgers) {
-          const l = r.ledgers.find((item) => item.id === selectedLedgerId);
-          if (l) foundLedger = l;
+      const rowLedgs = r.ledgers ?? (r.ledger ? [r.ledger] : []);
+      for (const l of rowLedgs) {
+        if (ledgIdSet.has(l.id) && !seenL.has(l.id)) {
+          seenL.add(l.id);
+          foundLedgers.push(l);
         }
       }
-      if (foundStatement && foundLedger) break;
     }
 
-    if (!foundStatement || !foundLedger) return;
+    if (foundStatements.length === 0 || foundLedgers.length === 0) return;
 
-    const stmtVal = Math.round(Number(foundStatement.value) * 100);
-    const ledgVal = Math.round(Number(foundLedger.value) * 100);
-    const diffCents = Math.abs(stmtVal - ledgVal);
+    const totalStmtCents = foundStatements.reduce((acc, s) => acc + Math.round(Number(s.value) * 100), 0);
+    const totalLedgCents = foundLedgers.reduce((acc, l) => acc + Math.round(Number(l.value) * 100), 0);
+    const diffCents = Math.abs(totalStmtCents - totalLedgCents);
     const diffVal = (diffCents / 100).toFixed(2);
+    const isGroup = foundStatements.length > 1 || foundLedgers.length > 1;
 
     let daysDiff = 0;
-    try {
-      const t1 = new Date(`${foundStatement.date.slice(0, 10)}T00:00:00.000Z`).getTime();
-      const t2 = new Date(`${foundLedger.date.slice(0, 10)}T00:00:00.000Z`).getTime();
-      if (!Number.isNaN(t1) && !Number.isNaN(t2)) {
-        daysDiff = Math.round(Math.abs(t1 - t2) / (1000 * 60 * 60 * 24));
+    if (foundStatements.length === 1 && foundLedgers.length === 1) {
+      try {
+        const t1 = new Date(`${foundStatements[0]!.date.slice(0, 10)}T00:00:00.000Z`).getTime();
+        const t2 = new Date(`${foundLedgers[0]!.date.slice(0, 10)}T00:00:00.000Z`).getTime();
+        if (!Number.isNaN(t1) && !Number.isNaN(t2)) {
+          daysDiff = Math.round(Math.abs(t1 - t2) / (1000 * 60 * 60 * 24));
+        }
+      } catch {
+        daysDiff = 0;
       }
-    } catch {
-      daysDiff = 0;
     }
 
+    const primaryStatus = isGroup
+      ? "AUTO_MATCH_GROUP"
+      : diffCents === 0
+      ? "AUTO_MATCH_EXACT"
+      : "AUTO_MATCH_DATE_TOLERANCE";
+
+    const reasonText = justification?.trim()
+      ? `Conciliado manualmente: ${justification.trim()}`
+      : isGroup
+      ? `Conciliado manualmente em grupo pelo usuário (${foundStatements.length} extrato × ${foundLedgers.length} razão).`
+      : "Conciliado manualmente pelo usuário entre pendências de extrato e razão.";
+
     const primaryReconciled: ReconciliationResult = {
-      id: `MANUAL_${foundStatement.id}_${foundLedger.id}`,
-      status: diffCents === 0 ? "AUTO_MATCH_EXACT" : "AUTO_MATCH_DATE_TOLERANCE",
-      rule: "MANUAL",
+      id: isGroup
+        ? `MANUAL_GROUP_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+        : `MANUAL_${foundStatements[0]!.id}_${foundLedgers[0]!.id}`,
+      status: primaryStatus,
+      rule: isGroup ? "MANUAL_GROUP" : "MANUAL",
       decisionLevel: "AUTOMATIC",
-      reason: justification?.trim()
-        ? `Conciliado manualmente: ${justification.trim()}`
-        : "Conciliado manualmente pelo usuário entre pendências de extrato e razão.",
-      ledger: foundLedger,
-      statement: foundStatement,
-      ledgers: [foundLedger],
-      statements: [foundStatement],
+      reason: reasonText,
+      ledger: foundLedgers[0]!,
+      statement: foundStatements[0]!,
+      ledgers: foundLedgers,
+      statements: foundStatements,
       valueTolerance: diffVal,
       valueDifference: diffVal,
       dateDifference: daysDiff,
@@ -865,32 +882,50 @@ export function ReconciliationApp({
     };
 
     const updatedResultsList = result.results.filter((r) => {
-      if (
-        r.status === "STATEMENT_WITHOUT_LEDGER" &&
-        (r.statement?.id === foundStatement?.id || r.id === `STATEMENT_WITHOUT_LEDGER_${foundStatement?.id}`)
-      ) {
-        return false;
+      if (r.status === "STATEMENT_WITHOUT_LEDGER") {
+        if (r.statement && stmtIdSet.has(r.statement.id)) return false;
+        if (r.statements && r.statements.some((s) => stmtIdSet.has(s.id))) return false;
+        if (selectedStatementIds.some((id) => r.id === `STATEMENT_WITHOUT_LEDGER_${id}`)) return false;
       }
-      if (
-        r.status === "LEDGER_WITHOUT_STATEMENT" &&
-        (r.ledger?.id === foundLedger?.id || r.id === `LEDGER_WITHOUT_STATEMENT_${foundLedger?.id}`)
-      ) {
-        return false;
+      if (r.status === "LEDGER_WITHOUT_STATEMENT") {
+        if (r.ledger && ledgIdSet.has(r.ledger.id)) return false;
+        if (r.ledgers && r.ledgers.some((l) => ledgIdSet.has(l.id))) return false;
+        if (selectedLedgerIds.some((id) => r.id === `LEDGER_WITHOUT_STATEMENT_${id}`)) return false;
       }
       return true;
     });
 
     updatedResultsList.push(primaryReconciled);
 
+    const ledgerAccountCounts = new Map<string, { ledgers: number; statements: number; ledgerVal: number }>();
+    for (const l of foundLedgers) {
+      const acct = l.ledgerAccount || "DEFAULT";
+      const curr = ledgerAccountCounts.get(acct) || { ledgers: 0, statements: 0, ledgerVal: 0 };
+      curr.ledgers += 1;
+      curr.ledgerVal += Number(l.value);
+      ledgerAccountCounts.set(acct, curr);
+    }
+    const primaryLedgerAccount = foundLedgers[0]?.ledgerAccount;
+    if (primaryLedgerAccount) {
+      const curr = ledgerAccountCounts.get(primaryLedgerAccount);
+      if (curr) {
+        curr.statements += foundStatements.length;
+      }
+    }
+
     const updatedSummaries = result.summaries?.map((summary) => {
-      const matchesLedger = foundLedger && summary.ledgerAccount === foundLedger.ledgerAccount;
-      if (matchesLedger) {
+      const countData = ledgerAccountCounts.get(summary.ledgerAccount);
+      if (countData || result.summaries.length === 1) {
+        const ledgersMatched = countData?.ledgers ?? foundLedgers.length;
+        const statementsMatched = countData?.statements ?? foundStatements.length;
+        const valueMatched = countData?.ledgerVal ?? (totalLedgCents / 100);
+
         return {
           ...summary,
           reconciledCount: summary.reconciledCount + 1,
-          reconciledValue: (Number(summary.reconciledValue) + Number(foundLedger.value)).toFixed(2),
-          ledgerWithoutStatementCount: Math.max(0, summary.ledgerWithoutStatementCount - 1),
-          statementWithoutLedgerCount: Math.max(0, summary.statementWithoutLedgerCount - 1),
+          reconciledValue: (Number(summary.reconciledValue) + valueMatched).toFixed(2),
+          ledgerWithoutStatementCount: Math.max(0, summary.ledgerWithoutStatementCount - ledgersMatched),
+          statementWithoutLedgerCount: Math.max(0, summary.statementWithoutLedgerCount - statementsMatched),
         };
       }
       return summary;
@@ -905,7 +940,7 @@ export function ReconciliationApp({
     setResult(updatedProcessingResult);
     setIsBidirectionalMatchOpen(false);
     setBidirectionalMatchAnchor(null);
-    if (selected?.id === foundStatement.id || selected?.id === foundLedger.id) {
+    if (selected && (stmtIdSet.has(selected.id) || ledgIdSet.has(selected.id))) {
       setSelected(null);
     }
 

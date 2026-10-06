@@ -192,9 +192,77 @@ describe("BidirectionalMatchModal Component", () => {
     fireEvent.click(confirmBtn);
 
     expect(onConfirm).toHaveBeenCalledWith(
-      "stmt-740k",
-      "ledg-740k",
+      ["stmt-740k"],
+      ["ledg-740k"],
       "Transferência autorizada entre contas da empresa",
+    );
+  });
+
+  it("permite selecionar múltiplos lançamentos de extrato e razão para conciliação em lote (N:1)", () => {
+    const onConfirm = vi.fn();
+    const onClose = vi.fn();
+
+    const mockLedgerTotal: LedgerRecord = {
+      id: "ledg-total",
+      company: "EMPRESA",
+      branch: "01",
+      ledgerAccount: "1.1.1.02.001",
+      date: "2026-01-29",
+      document: "756190",
+      history: "LOTE COMBINADO",
+      value: "740010.50",
+      type: "DEBIT",
+      sourceId: "l-total",
+      evidence: {
+        fileId: "razao",
+        originalName: "razao.xlsx",
+        extractionMethod: "TABULAR",
+        line: 50,
+      },
+    };
+    const pendingLedgerTotalResult: ReconciliationResult = {
+      id: "LEDGER_WITHOUT_STATEMENT_ledg-total",
+      status: "LEDGER_WITHOUT_STATEMENT",
+      rule: "RF-09",
+      decisionLevel: "REVIEW_REQUIRED",
+      reason: "Lançamento total do razão.",
+      ledger: mockLedgerTotal,
+      ledgers: [mockLedgerTotal],
+      valueTolerance: "0.00",
+      ruleVersion: "1.0",
+    };
+
+    render(
+      <BidirectionalMatchModal
+        anchorItem={null}
+        allResults={[
+          pendingStatementResult,
+          pendingStatementTaxaResult,
+          pendingLedgerTotalResult,
+        ]}
+        onClose={onClose}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    // Seleciona os dois extratos (740.000 + 10,50)
+    fireEvent.click(screen.getByDisplayValue("stmt-740k"));
+    fireEvent.click(screen.getByDisplayValue("stmt-taxa"));
+
+    // Seleciona o razão total (740.010,50)
+    fireEvent.click(screen.getByDisplayValue("ledg-total"));
+
+    // O painel deve exibir grupo selecionado (2 Extrato x 1 Razão)
+    expect(screen.getByText(/✓ Grupo selecionado \(2 Extrato × 1 Razão\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Diferença: R\$\s*0,00 \(Exato\)/)).toBeInTheDocument();
+
+    const confirmBtn = screen.getByRole("button", { name: "Confirmar conciliação manual" });
+    fireEvent.click(confirmBtn);
+
+    expect(onConfirm).toHaveBeenCalledWith(
+      ["stmt-740k", "stmt-taxa"],
+      ["ledg-total"],
+      "",
     );
   });
 

@@ -33,8 +33,8 @@ export interface BidirectionalMatchModalProps {
   onClose: () => void;
   /** Callback para confirmar a conciliação manual */
   onConfirm: (
-    selectedStatementId: string,
-    selectedLedgerId: string,
+    selectedStatementIds: string[],
+    selectedLedgerIds: string[],
     justification?: string
   ) => void | Promise<void>;
 }
@@ -106,17 +106,44 @@ export function BidirectionalMatchModal({
   const anchorIsStatement = Boolean(anchorItem?.statement || (anchorItem?.statements && anchorItem.statements.length > 0));
   const anchorIsLedger = Boolean(anchorItem?.ledger || (anchorItem?.ledgers && anchorItem.ledgers.length > 0));
 
-  const initialStatementId = anchorItem?.statement?.id ?? anchorItem?.statements?.[0]?.id ?? "";
-  const initialLedgerId = anchorItem?.ledger?.id ?? anchorItem?.ledgers?.[0]?.id ?? "";
+  const initialStatementIds = useMemo(() => {
+    if (anchorItem?.statement) return [anchorItem.statement.id];
+    if (anchorItem?.statements && anchorItem.statements.length > 0) {
+      return anchorItem.statements.map((s) => s.id);
+    }
+    return [];
+  }, [anchorItem]);
 
-  const [selectedStatementId, setSelectedStatementId] = useState<string>(initialStatementId);
-  const [selectedLedgerId, setSelectedLedgerId] = useState<string>(initialLedgerId);
+  const initialLedgerIds = useMemo(() => {
+    if (anchorItem?.ledger) return [anchorItem.ledger.id];
+    if (anchorItem?.ledgers && anchorItem.ledgers.length > 0) {
+      return anchorItem.ledgers.map((l) => l.id);
+    }
+    return [];
+  }, [anchorItem]);
+
+  const [selectedStatementIds, setSelectedStatementIds] = useState<string[]>(initialStatementIds);
+  const [selectedLedgerIds, setSelectedLedgerIds] = useState<string[]>(initialLedgerIds);
   const [justification, setJustification] = useState<string>("");
+
+  const toggleStatement = (id: string) => {
+    setSelectedStatementIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleLedger = (id: string) => {
+    setSelectedLedgerIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const clearStatements = () => setSelectedStatementIds([]);
+  const clearLedgers = () => setSelectedLedgerIds([]);
 
   // Estado dos filtros
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [amountFilterMode, setAmountFilterMode] = useState<"ALL" | "EXACT" | "TOLERANCE">(() => {
-    // Se veio de âncora, inicializa preferindo EXACT se houver correspondência exata
     return anchorItem ? "EXACT" : "ALL";
   });
   const [amountTolerance, setAmountTolerance] = useState<string>("0.05");
@@ -126,28 +153,44 @@ export function BidirectionalMatchModal({
   const justificationInputId = useId();
   const searchInputId = useId();
 
-  // Objeto de referência para filtros comparativos
-  const referenceRecord = useMemo(() => {
-    if (anchorIsStatement && selectedStatementId) {
-      return allStatements.find((s) => s.id === selectedStatementId);
-    }
-    if (anchorIsLedger && selectedLedgerId) {
-      return allLedgers.find((l) => l.id === selectedLedgerId);
-    }
-    if (selectedStatementId) {
-      return allStatements.find((s) => s.id === selectedStatementId);
-    }
-    if (selectedLedgerId) {
-      return allLedgers.find((l) => l.id === selectedLedgerId);
-    }
+  const selectedStatements = useMemo(() => {
+    return allStatements.filter((s) => selectedStatementIds.includes(s.id));
+  }, [allStatements, selectedStatementIds]);
+
+  const selectedLedgers = useMemo(() => {
+    return allLedgers.filter((l) => selectedLedgerIds.includes(l.id));
+  }, [allLedgers, selectedLedgerIds]);
+
+  const totalStatementCents = useMemo(() => {
+    return selectedStatements.reduce((acc, s) => acc + Math.round(Number(s.value) * 100), 0);
+  }, [selectedStatements]);
+
+  const totalLedgerCents = useMemo(() => {
+    return selectedLedgers.reduce((acc, l) => acc + Math.round(Number(l.value) * 100), 0);
+  }, [selectedLedgers]);
+
+  // Alvos de comparação para filtros
+  const targetLedgerCents = useMemo(() => {
+    if (selectedStatements.length > 0) return totalStatementCents;
     return null;
-  }, [anchorIsStatement, anchorIsLedger, selectedStatementId, selectedLedgerId, allStatements, allLedgers]);
+  }, [selectedStatements, totalStatementCents]);
+
+  const targetStatementCents = useMemo(() => {
+    if (selectedLedgers.length > 0) return totalLedgerCents;
+    return null;
+  }, [selectedLedgers, totalLedgerCents]);
+
+  const referenceDate = useMemo(() => {
+    if (selectedStatements.length > 0) return selectedStatements[0]!.date;
+    if (selectedLedgers.length > 0) return selectedLedgers[0]!.date;
+    return null;
+  }, [selectedStatements, selectedLedgers]);
 
   // Filtragem dos Extratos
   const filteredStatements = useMemo(() => {
     return allStatements.filter((stmt) => {
-      // Se este for o selecionado, sempre manter na lista
-      if (stmt.id === selectedStatementId) return true;
+      // Se este for selecionado, sempre manter na lista
+      if (selectedStatementIds.includes(stmt.id)) return true;
 
       // Filtro de texto (histórico, doc, banco, agência, conta, valor)
       if (searchTerm.trim()) {
@@ -168,11 +211,12 @@ export function BidirectionalMatchModal({
         if (stmtType !== typeFilter) return false;
       }
 
-      // Filtros em relação à referência (se a referência for um Razão)
-      if (referenceRecord && "ledgerAccount" in referenceRecord) {
-        const refVal = Math.round(Number(referenceRecord.value) * 100);
+      // Filtros em relação à referência (se houver Razão selecionado)
+      if (targetStatementCents !== null) {
+        const remainingCents = targetStatementCents - totalStatementCents;
+        const targetVal = remainingCents > 0 ? remainingCents : targetStatementCents;
         const stmtVal = Math.round(Number(stmt.value) * 100);
-        const diffCents = Math.abs(refVal - stmtVal);
+        const diffCents = Math.abs(targetVal - stmtVal);
 
         if (amountFilterMode === "EXACT" && diffCents !== 0) {
           return false;
@@ -182,8 +226,8 @@ export function BidirectionalMatchModal({
           if (diffCents > maxDiffCents) return false;
         }
 
-        if (dateToleranceDays !== "ALL") {
-          const days = getDaysDiff(stmt.date, referenceRecord.date);
+        if (dateToleranceDays !== "ALL" && referenceDate) {
+          const days = getDaysDiff(stmt.date, referenceDate);
           const maxDays = parseInt(dateToleranceDays, 10);
           if (days > maxDays) return false;
         }
@@ -191,13 +235,13 @@ export function BidirectionalMatchModal({
 
       return true;
     });
-  }, [allStatements, selectedStatementId, searchTerm, typeFilter, referenceRecord, amountFilterMode, amountTolerance, dateToleranceDays]);
+  }, [allStatements, selectedStatementIds, searchTerm, typeFilter, targetStatementCents, totalStatementCents, amountFilterMode, amountTolerance, dateToleranceDays, referenceDate]);
 
   // Filtragem dos Razões
   const filteredLedgers = useMemo(() => {
     return allLedgers.filter((ledg) => {
-      // Se este for o selecionado, sempre manter na lista
-      if (ledg.id === selectedLedgerId) return true;
+      // Se este for selecionado, sempre manter na lista
+      if (selectedLedgerIds.includes(ledg.id)) return true;
 
       // Filtro de texto (histórico, doc, conta, valor)
       if (searchTerm.trim()) {
@@ -217,11 +261,12 @@ export function BidirectionalMatchModal({
         if (ledgType !== typeFilter) return false;
       }
 
-      // Filtros em relação à referência (se a referência for um Extrato)
-      if (referenceRecord && "bank" in referenceRecord) {
-        const refVal = Math.round(Number(referenceRecord.value) * 100);
+      // Filtros em relação à referência (se houver Extrato selecionado)
+      if (targetLedgerCents !== null) {
+        const remainingCents = targetLedgerCents - totalLedgerCents;
+        const targetVal = remainingCents > 0 ? remainingCents : targetLedgerCents;
         const ledgVal = Math.round(Number(ledg.value) * 100);
-        const diffCents = Math.abs(refVal - ledgVal);
+        const diffCents = Math.abs(targetVal - ledgVal);
 
         if (amountFilterMode === "EXACT" && diffCents !== 0) {
           return false;
@@ -231,8 +276,8 @@ export function BidirectionalMatchModal({
           if (diffCents > maxDiffCents) return false;
         }
 
-        if (dateToleranceDays !== "ALL") {
-          const days = getDaysDiff(ledg.date, referenceRecord.date);
+        if (dateToleranceDays !== "ALL" && referenceDate) {
+          const days = getDaysDiff(ledg.date, referenceDate);
           const maxDays = parseInt(dateToleranceDays, 10);
           if (days > maxDays) return false;
         }
@@ -240,28 +285,31 @@ export function BidirectionalMatchModal({
 
       return true;
     });
-  }, [allLedgers, selectedLedgerId, searchTerm, typeFilter, referenceRecord, amountFilterMode, amountTolerance, dateToleranceDays]);
+  }, [allLedgers, selectedLedgerIds, searchTerm, typeFilter, targetLedgerCents, totalLedgerCents, amountFilterMode, amountTolerance, dateToleranceDays, referenceDate]);
 
-  const selectedStatement = allStatements.find((s) => s.id === selectedStatementId);
-  const selectedLedger = allLedgers.find((l) => l.id === selectedLedgerId);
-  const isValid = Boolean(selectedStatementId && selectedLedgerId && selectedStatement && selectedLedger);
+  const isValid = selectedStatementIds.length > 0 && selectedLedgerIds.length > 0;
 
   // Cálculos de comparação
   const comparison = useMemo(() => {
-    if (!selectedStatement || !selectedLedger) return null;
-    const stmtCents = Math.round(Number(selectedStatement.value) * 100);
-    const ledgCents = Math.round(Number(selectedLedger.value) * 100);
-    const diffCents = Math.abs(stmtCents - ledgCents);
+    if (!isValid) return null;
+    const diffCents = Math.abs(totalStatementCents - totalLedgerCents);
     const diffAmount = (diffCents / 100).toFixed(2);
-    const daysDiff = getDaysDiff(selectedStatement.date, selectedLedger.date);
+    const isGroup = selectedStatements.length > 1 || selectedLedgers.length > 1;
+
+    let daysDiff = 0;
+    if (selectedStatements.length === 1 && selectedLedgers.length === 1) {
+      daysDiff = getDaysDiff(selectedStatements[0]!.date, selectedLedgers[0]!.date);
+    }
 
     return {
       isExactAmount: diffCents === 0,
       diffAmount,
+      diffCents,
       daysDiff,
       sameDate: daysDiff === 0,
+      isGroup,
     };
-  }, [selectedStatement, selectedLedger]);
+  }, [isValid, totalStatementCents, totalLedgerCents, selectedStatements, selectedLedgers]);
 
   return (
     <div
@@ -469,11 +517,45 @@ export function BidirectionalMatchModal({
           <div className="comparison-columns" style={{ gap: "16px" }}>
             {/* Coluna Extrato Bancário */}
             <div className="comparison-col" style={{ display: "flex", flexDirection: "column" }}>
-              <div className="col-header">
-                <span className="badge-type">Extrato Bancário</span>
-                <span className="badge-count">
-                  {filteredStatements.length} de {allStatements.length} pendência{allStatements.length > 1 ? "s" : ""}
-                </span>
+              <div className="col-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                  <span className="badge-type">Extrato Bancário</span>
+                  {selectedStatementIds.length > 0 && (
+                    <span
+                      className="badge"
+                      style={{
+                        background: "#DBEAFE",
+                        color: "#1D4ED8",
+                        fontWeight: 600,
+                        fontSize: "11px",
+                      }}
+                    >
+                      {selectedStatementIds.length} sel. ({formatCurrency(totalStatementCents / 100)})
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span className="badge-count">
+                    {filteredStatements.length} de {allStatements.length} pendência{allStatements.length > 1 ? "s" : ""}
+                  </span>
+                  {selectedStatementIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearStatements}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        fontSize: "11px",
+                        cursor: "pointer",
+                        textDecoration: "underline",
+                        padding: "0 2px",
+                      }}
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
               </div>
               <div
                 style={{
@@ -491,8 +573,8 @@ export function BidirectionalMatchModal({
                   </div>
                 ) : (
                   filteredStatements.map((s) => {
-                    const isSelected = selectedStatementId === s.id;
-                    const isAnchor = anchorIsStatement && anchorItem?.statement?.id === s.id;
+                    const isSelected = selectedStatementIds.includes(s.id);
+                    const isAnchor = anchorIsStatement && initialStatementIds.includes(s.id);
                     return (
                       <label
                         key={s.id}
@@ -508,11 +590,11 @@ export function BidirectionalMatchModal({
                       >
                         <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
                           <input
-                            type="radio"
+                            type="checkbox"
                             name="bidirectional-statement"
                             value={s.id}
                             checked={isSelected}
-                            onChange={() => setSelectedStatementId(s.id)}
+                            onChange={() => toggleStatement(s.id)}
                             style={{ marginTop: "3px" }}
                           />
                           <div style={{ flex: 1, minWidth: 0 }}>
@@ -569,11 +651,45 @@ export function BidirectionalMatchModal({
 
             {/* Coluna Razão Protheus */}
             <div className="comparison-col" style={{ display: "flex", flexDirection: "column" }}>
-              <div className="col-header">
-                <span className="badge-type">Razão Protheus</span>
-                <span className="badge-count">
-                  {filteredLedgers.length} de {allLedgers.length} pendência{allLedgers.length > 1 ? "s" : ""}
-                </span>
+              <div className="col-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                  <span className="badge-type">Razão Protheus</span>
+                  {selectedLedgerIds.length > 0 && (
+                    <span
+                      className="badge"
+                      style={{
+                        background: "#DBEAFE",
+                        color: "#1D4ED8",
+                        fontWeight: 600,
+                        fontSize: "11px",
+                      }}
+                    >
+                      {selectedLedgerIds.length} sel. ({formatCurrency(totalLedgerCents / 100)})
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span className="badge-count">
+                    {filteredLedgers.length} de {allLedgers.length} pendência{allLedgers.length > 1 ? "s" : ""}
+                  </span>
+                  {selectedLedgerIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearLedgers}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        fontSize: "11px",
+                        cursor: "pointer",
+                        textDecoration: "underline",
+                        padding: "0 2px",
+                      }}
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
               </div>
               <div
                 style={{
@@ -591,8 +707,8 @@ export function BidirectionalMatchModal({
                   </div>
                 ) : (
                   filteredLedgers.map((l) => {
-                    const isSelected = selectedLedgerId === l.id;
-                    const isAnchor = anchorIsLedger && anchorItem?.ledger?.id === l.id;
+                    const isSelected = selectedLedgerIds.includes(l.id);
+                    const isAnchor = anchorIsLedger && initialLedgerIds.includes(l.id);
                     return (
                       <label
                         key={l.id}
@@ -608,11 +724,11 @@ export function BidirectionalMatchModal({
                       >
                         <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
                           <input
-                            type="radio"
+                            type="checkbox"
                             name="bidirectional-ledger"
                             value={l.id}
                             checked={isSelected}
-                            onChange={() => setSelectedLedgerId(l.id)}
+                            onChange={() => toggleLedger(l.id)}
                             style={{ marginTop: "3px" }}
                           />
                           <div style={{ flex: 1, minWidth: 0 }}>
@@ -667,8 +783,8 @@ export function BidirectionalMatchModal({
             </div>
           </div>
 
-          {/* Painel de Conferência do Par Selecionado */}
-          {isValid && selectedStatement && selectedLedger && comparison ? (
+          {/* Painel de Conferência do Par / Grupo Selecionado */}
+          {isValid && comparison ? (
             <div
               style={{
                 background: comparison.isExactAmount ? "#F0FDF4" : "#FFFBEB",
@@ -677,7 +793,7 @@ export function BidirectionalMatchModal({
                 padding: "12px 16px",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
                 <span
                   style={{
                     fontSize: "13px",
@@ -685,9 +801,11 @@ export function BidirectionalMatchModal({
                     color: comparison.isExactAmount ? "#166534" : "#92400E",
                   }}
                 >
-                  ✓ Par selecionado para conciliação
+                  {comparison.isGroup
+                    ? `✓ Grupo selecionado (${selectedStatements.length} Extrato × ${selectedLedgers.length} Razão)`
+                    : "✓ Par selecionado para conciliação"}
                 </span>
-                <div style={{ display: "flex", gap: "8px" }}>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                   <span
                     className="badge"
                     style={{
@@ -700,16 +818,30 @@ export function BidirectionalMatchModal({
                       ? "Diferença: R$ 0,00 (Exato)"
                       : `Diferença de valor: R$ ${Number(comparison.diffAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
                   </span>
-                  <span
-                    className="badge"
-                    style={{
-                      background: comparison.sameDate ? "#DCFCE7" : "#F1F5F9",
-                      color: comparison.sameDate ? "#166534" : "var(--text-main)",
-                      border: "1px solid var(--border)",
-                    }}
-                  >
-                    {comparison.sameDate ? "Mesma data" : `${comparison.daysDiff} dia(s) de diferença`}
-                  </span>
+                  {!comparison.isGroup && (
+                    <span
+                      className="badge"
+                      style={{
+                        background: comparison.sameDate ? "#DCFCE7" : "#F1F5F9",
+                        color: comparison.sameDate ? "#166534" : "var(--text-main)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {comparison.sameDate ? "Mesma data" : `${comparison.daysDiff} dia(s) de diferença`}
+                    </span>
+                  )}
+                  {comparison.isGroup && (
+                    <span
+                      className="badge"
+                      style={{
+                        background: "#E0E7FF",
+                        color: "#3730A3",
+                        border: "1px solid #C7D2FE",
+                      }}
+                    >
+                      Lote / Múltiplos ({selectedStatements.length + selectedLedgers.length} itens)
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -724,17 +856,33 @@ export function BidirectionalMatchModal({
                 }}
               >
                 <div>
-                  <strong>Extrato:</strong> {formatDateForDisplay(selectedStatement.date)} · Doc:{" "}
-                  {selectedStatement.document || "—"} · {formatCurrency(selectedStatement.value)}
-                  <div style={{ fontSize: "11px", opacity: 0.9, marginTop: "2px" }}>
-                    {selectedStatement.history || "Sem descrição"}
+                  <div style={{ fontWeight: 700, marginBottom: "4px" }}>
+                    Total Extrato: {formatCurrency(totalStatementCents / 100)} ({selectedStatements.length} item{selectedStatements.length > 1 ? "s" : ""})
+                  </div>
+                  <div style={{ maxHeight: "100px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {selectedStatements.map((s) => (
+                      <div key={s.id} style={{ fontSize: "11px", opacity: 0.9, background: "rgba(255,255,255,0.6)", padding: "4px 6px", borderRadius: "4px" }}>
+                        <strong>{formatDateForDisplay(s.date)}</strong> · Doc: {s.document || "—"} · <strong>{formatCurrency(s.value)}</strong>
+                        <div style={{ fontSize: "10px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {s.history || "Sem descrição"}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
                 <div>
-                  <strong>Razão:</strong> {formatDateForDisplay(selectedLedger.date)} · Doc:{" "}
-                  {selectedLedger.document || "—"} · {formatCurrency(selectedLedger.value)}
-                  <div style={{ fontSize: "11px", opacity: 0.9, marginTop: "2px" }}>
-                    {selectedLedger.history || "Sem histórico"}
+                  <div style={{ fontWeight: 700, marginBottom: "4px" }}>
+                    Total Razão: {formatCurrency(totalLedgerCents / 100)} ({selectedLedgers.length} item{selectedLedgers.length > 1 ? "s" : ""})
+                  </div>
+                  <div style={{ maxHeight: "100px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {selectedLedgers.map((l) => (
+                      <div key={l.id} style={{ fontSize: "11px", opacity: 0.9, background: "rgba(255,255,255,0.6)", padding: "4px 6px", borderRadius: "4px" }}>
+                        <strong>{formatDateForDisplay(l.date)}</strong> · Doc: {l.document || "—"} · <strong>{formatCurrency(l.value)}</strong>
+                        <div style={{ fontSize: "10px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {l.history || "Sem histórico"}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -782,10 +930,10 @@ export function BidirectionalMatchModal({
                 color: "var(--text-muted)",
               }}
             >
-              {!selectedStatementId && !selectedLedgerId
-                ? "Selecione 1 movimento do extrato à esquerda e 1 lançamento do razão à direita para conferir e confirmar o pareamento."
-                : !selectedStatementId
-                ? "Selecione 1 movimento do extrato à esquerda para completar o par."
+              {selectedStatementIds.length === 0 && selectedLedgerIds.length === 0
+                ? "Selecione pelo menos 1 movimento do extrato à esquerda e 1 lançamento do razão à direita para conferir e confirmar o pareamento."
+                : selectedStatementIds.length === 0
+                ? "Selecione pelo menos 1 movimento do extrato à esquerda para completar a conciliação."
                 : "Selecione 1 lançamento do razão à direita para completar o par."}
             </div>
           )}
@@ -801,8 +949,8 @@ export function BidirectionalMatchModal({
             className="button"
             disabled={!isValid}
             onClick={() => {
-              if (selectedStatementId && selectedLedgerId) {
-                void onConfirm(selectedStatementId, selectedLedgerId, justification);
+              if (selectedStatementIds.length > 0 && selectedLedgerIds.length > 0) {
+                void onConfirm(selectedStatementIds, selectedLedgerIds, justification);
               }
             }}
           >

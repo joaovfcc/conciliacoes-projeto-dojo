@@ -1019,6 +1019,8 @@ tbody td {
   color: var(--blue-900);
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  position: relative;
+  z-index: 2;
 }
 
 .dropzone-select-btn:hover {
@@ -1034,6 +1036,7 @@ tbody td {
   height: 100%;
   opacity: 0;
   cursor: pointer;
+  z-index: 1;
 }
 
 .file-list {
@@ -1041,6 +1044,9 @@ tbody td {
   display: grid;
   gap: 6px;
   text-align: left;
+  position: relative;
+  z-index: 10;
+  pointer-events: auto;
 }
 
 .file-item {
@@ -1052,6 +1058,14 @@ tbody td {
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 12px;
+  position: relative;
+  z-index: 10;
+}
+
+.file-item button {
+  position: relative;
+  z-index: 11;
+  cursor: pointer;
 }
 
 .file-item-name {

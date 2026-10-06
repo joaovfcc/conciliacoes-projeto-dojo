@@ -30,6 +30,7 @@ import { EvidenceDrawer } from "./evidence-drawer";
 import { AdminUsersPanel } from "./admin-users-panel";
 import { CompaniesAccountsPanel } from "./companies-accounts-panel";
 import { ManualMatchModal } from "./manual-match-modal";
+import { BidirectionalMatchModal } from "./bidirectional-match-modal";
 
 type View = "RECONCILIATION" | "HISTORY" | "COMPANIES_ACCOUNTS" | "USERS";
 type Stage = "WELCOME" | "FILES" | "PREFLIGHT" | "CONFIRM" | "PROCESSING" | "RESULTS";
@@ -138,6 +139,8 @@ export function ReconciliationApp({
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyRecordId, setHistoryRecordId] = useState<string | null>(null);
   const [manualMatchItem, setManualMatchItem] = useState<ReconciliationResult | null>(null);
+  const [bidirectionalMatchAnchor, setBidirectionalMatchAnchor] = useState<ReconciliationResult | null>(null);
+  const [isBidirectionalMatchOpen, setIsBidirectionalMatchOpen] = useState(false);
   const [preflightStatusText, setPreflightStatusText] = useState("Validando conteúdo e identificando contas contábeis e bancárias.");
   const [preflightProgress, setPreflightProgress] = useState(20);
   const [preflightActiveStep, setPreflightActiveStep] = useState<"UPLOAD" | "PARSING" | "MAPPING">("UPLOAD");
@@ -236,13 +239,13 @@ export function ReconciliationApp({
           setStage("FILES");
         } else if (processingDeadlineRef.current && Date.now() >= processingDeadlineRef.current) {
           setError("O processamento excedeu o tempo máximo de espera. Verifique os arquivos e tente novamente.");
-          setStage(stage === "PREFLIGHT" ? "FILES" : "CONFIRM");
+          setStage("CONFIRM");
         }
       } catch (exception) {
         pollingFailuresRef.current += 1;
         if (pollingFailuresRef.current >= maximumStatusFailures) {
           setError(`${messageOf(exception)} A verificação foi interrompida para evitar carregamento indefinido; tente novamente.`);
-          setStage(stage === "PREFLIGHT" ? "FILES" : "CONFIRM");
+          setStage("CONFIRM");
         }
       } finally {
         pollingInFlightRef.current = false;
@@ -542,6 +545,8 @@ export function ReconciliationApp({
     setError("");
     setHistoryRecordId(null);
     setManualMatchItem(null);
+    setBidirectionalMatchAnchor(null);
+    setIsBidirectionalMatchOpen(false);
   }
 
   async function openHistory(id: string): Promise<void> {
@@ -793,6 +798,136 @@ export function ReconciliationApp({
     }
   }
 
+  async function handleBidirectionalMatch(
+    selectedStatementId: string,
+    selectedLedgerId: string,
+    justification?: string,
+  ): Promise<void> {
+    if (!result) return;
+
+    let foundStatement: StatementRecord | undefined;
+    let foundLedger: LedgerRecord | undefined;
+
+    for (const r of result.results) {
+      if (!foundStatement) {
+        if (r.statement?.id === selectedStatementId) {
+          foundStatement = r.statement;
+        } else if (r.statements) {
+          const s = r.statements.find((item) => item.id === selectedStatementId);
+          if (s) foundStatement = s;
+        }
+      }
+      if (!foundLedger) {
+        if (r.ledger?.id === selectedLedgerId) {
+          foundLedger = r.ledger;
+        } else if (r.ledgers) {
+          const l = r.ledgers.find((item) => item.id === selectedLedgerId);
+          if (l) foundLedger = l;
+        }
+      }
+      if (foundStatement && foundLedger) break;
+    }
+
+    if (!foundStatement || !foundLedger) return;
+
+    const stmtVal = Math.round(Number(foundStatement.value) * 100);
+    const ledgVal = Math.round(Number(foundLedger.value) * 100);
+    const diffCents = Math.abs(stmtVal - ledgVal);
+    const diffVal = (diffCents / 100).toFixed(2);
+
+    let daysDiff = 0;
+    try {
+      const t1 = new Date(`${foundStatement.date.slice(0, 10)}T00:00:00.000Z`).getTime();
+      const t2 = new Date(`${foundLedger.date.slice(0, 10)}T00:00:00.000Z`).getTime();
+      if (!Number.isNaN(t1) && !Number.isNaN(t2)) {
+        daysDiff = Math.round(Math.abs(t1 - t2) / (1000 * 60 * 60 * 24));
+      }
+    } catch {
+      daysDiff = 0;
+    }
+
+    const primaryReconciled: ReconciliationResult = {
+      id: `MANUAL_${foundStatement.id}_${foundLedger.id}`,
+      status: diffCents === 0 ? "AUTO_MATCH_EXACT" : "AUTO_MATCH_DATE_TOLERANCE",
+      rule: "MANUAL",
+      decisionLevel: "AUTOMATIC",
+      reason: justification?.trim()
+        ? `Conciliado manualmente: ${justification.trim()}`
+        : "Conciliado manualmente pelo usuário entre pendências de extrato e razão.",
+      ledger: foundLedger,
+      statement: foundStatement,
+      ledgers: [foundLedger],
+      statements: [foundStatement],
+      valueTolerance: diffVal,
+      valueDifference: diffVal,
+      dateDifference: daysDiff,
+      ruleVersion: "2.0-manual",
+    };
+
+    const updatedResultsList = result.results.filter((r) => {
+      if (
+        r.status === "STATEMENT_WITHOUT_LEDGER" &&
+        (r.statement?.id === foundStatement?.id || r.id === `STATEMENT_WITHOUT_LEDGER_${foundStatement?.id}`)
+      ) {
+        return false;
+      }
+      if (
+        r.status === "LEDGER_WITHOUT_STATEMENT" &&
+        (r.ledger?.id === foundLedger?.id || r.id === `LEDGER_WITHOUT_STATEMENT_${foundLedger?.id}`)
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    updatedResultsList.push(primaryReconciled);
+
+    const updatedSummaries = result.summaries?.map((summary) => {
+      const matchesLedger = foundLedger && summary.ledgerAccount === foundLedger.ledgerAccount;
+      if (matchesLedger) {
+        return {
+          ...summary,
+          reconciledCount: summary.reconciledCount + 1,
+          reconciledValue: (Number(summary.reconciledValue) + Number(foundLedger.value)).toFixed(2),
+          ledgerWithoutStatementCount: Math.max(0, summary.ledgerWithoutStatementCount - 1),
+          statementWithoutLedgerCount: Math.max(0, summary.statementWithoutLedgerCount - 1),
+        };
+      }
+      return summary;
+    });
+
+    const updatedProcessingResult: ProcessingResult = {
+      ...result,
+      results: updatedResultsList,
+      ...(updatedSummaries ? { summaries: updatedSummaries } : {}),
+    };
+
+    setResult(updatedProcessingResult);
+    setIsBidirectionalMatchOpen(false);
+    setBidirectionalMatchAnchor(null);
+    if (selected?.id === foundStatement.id || selected?.id === foundLedger.id) {
+      setSelected(null);
+    }
+
+    try {
+      if (historyRecordId) {
+        await authenticatedFetch(`/api/reconciliation-history/${historyRecordId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ result: updatedProcessingResult }),
+        });
+      } else if (credential) {
+        await authenticatedFetch(`/api/sessions/${credential.id}/results`, {
+          method: "PATCH",
+          headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ result: updatedProcessingResult }),
+        });
+      }
+    } catch (err) {
+      console.warn("Não foi possível persistir a conciliação manual no backend:", err);
+    }
+  }
+
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? companies[0];
 
   return (
@@ -968,13 +1103,35 @@ export function ReconciliationApp({
                   busy={busy}
                   historyRecordId={historyRecordId}
                   onDeleteHistory={deleteHistory}
-                  onOpenManualMatch={(item) => setManualMatchItem(item)}
+                  onOpenManualMatch={(item) => {
+                    if (item.status === "STATEMENT_WITHOUT_LEDGER" || item.status === "LEDGER_WITHOUT_STATEMENT") {
+                      setBidirectionalMatchAnchor(item);
+                      setIsBidirectionalMatchOpen(true);
+                    } else {
+                      setManualMatchItem(item);
+                    }
+                  }}
+                  onOpenBidirectionalMatch={(item) => {
+                    setBidirectionalMatchAnchor(item);
+                    setIsBidirectionalMatchOpen(true);
+                  }}
                 />
                 {manualMatchItem && (
                   <ManualMatchModal
                     item={manualMatchItem}
                     onClose={() => setManualMatchItem(null)}
                     onConfirm={handleManualMatch}
+                  />
+                )}
+                {isBidirectionalMatchOpen && (
+                  <BidirectionalMatchModal
+                    anchorItem={bidirectionalMatchAnchor}
+                    allResults={result.results}
+                    onClose={() => {
+                      setIsBidirectionalMatchOpen(false);
+                      setBidirectionalMatchAnchor(null);
+                    }}
+                    onConfirm={handleBidirectionalMatch}
                   />
                 )}
               </>
@@ -1029,7 +1186,14 @@ export function ReconciliationApp({
       <EvidenceDrawer
         selected={selected}
         onClose={() => setSelected(null)}
-        onOpenManualMatch={(item) => setManualMatchItem(item)}
+        onOpenManualMatch={(item) => {
+          if (item.status === "STATEMENT_WITHOUT_LEDGER" || item.status === "LEDGER_WITHOUT_STATEMENT") {
+            setBidirectionalMatchAnchor(item);
+            setIsBidirectionalMatchOpen(true);
+          } else {
+            setManualMatchItem(item);
+          }
+        }}
       />
     </>
   );
@@ -1662,10 +1826,15 @@ function UploadBox({
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleRemove = (index: number) => {
+  const handleRemove = (event: React.MouseEvent, index: number) => {
+    event.stopPropagation();
+    event.preventDefault();
     const next = [...files];
     next.splice(index, 1);
     onFiles(next);
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
   };
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1676,6 +1845,9 @@ function UploadBox({
       onFiles(newFiles);
     }
     event.target.value = "";
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
   };
 
   const handleDrop = (event: React.DragEvent) => {
@@ -1686,6 +1858,9 @@ function UploadBox({
       onFiles([...files, ...droppedFiles]);
     } else if (droppedFiles.length > 0) {
       onFiles([droppedFiles[0]!]);
+    }
+    if (inputRef.current) {
+      inputRef.current.value = "";
     }
   };
 
@@ -1731,7 +1906,7 @@ function UploadBox({
                 type="button"
                 className="button danger btn-sm"
                 style={{ marginLeft: "8px", padding: "2px 6px" }}
-                onClick={() => handleRemove(i)}
+                onClick={(event) => handleRemove(event, i)}
               >
                 Remover
               </button>
@@ -2107,6 +2282,7 @@ function Results(props: {
   historyRecordId?: string | null;
   onDeleteHistory?: (id: string) => Promise<boolean>;
   onOpenManualMatch: (item: ReconciliationResult) => void;
+  onOpenBidirectionalMatch?: (item: ReconciliationResult | null) => void;
 }) {
   const [visibleCount, setVisibleCount] = useState(25);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -2342,6 +2518,33 @@ function Results(props: {
           <Investments entries={props.result.investments} />
         ) : (
           <>
+            {(props.activeTab === "EXTRATO_SEM_RAZAO" || props.activeTab === "RAZAO_SEM_EXTRATO") && props.onOpenBidirectionalMatch && (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  background: "#EFF6FF",
+                  border: "1px solid #BFDBFE",
+                  borderRadius: "8px",
+                  padding: "10px 14px",
+                  marginBottom: "12px",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ fontSize: "13px", color: "#1E40AF" }}>
+                  💡 <strong>Conciliação Manual Bidirecional:</strong> Localize e cruze pendências entre extrato e razão com filtros avançados de valor, data e histórico.
+                </div>
+                <button
+                  type="button"
+                  className="button btn-sm"
+                  onClick={() => props.onOpenBidirectionalMatch?.(null)}
+                >
+                  🔍 Abrir conciliação manual
+                </button>
+              </div>
+            )}
             {props.activeTab === "CONCILIADOS" && (
               <div className="subtabs-bar" role="toolbar" aria-label="Filtro de conciliados">
                 <button
@@ -2448,6 +2651,15 @@ function Results(props: {
                                 onClick={() => props.onOpenManualMatch(item)}
                               >
                                 Conciliar manual
+                              </button>
+                            )}
+                            {(item.status === "STATEMENT_WITHOUT_LEDGER" || item.status === "LEDGER_WITHOUT_STATEMENT") && props.onOpenBidirectionalMatch && (
+                              <button
+                                type="button"
+                                className="button btn-sm"
+                                onClick={() => props.onOpenBidirectionalMatch?.(item)}
+                              >
+                                {item.status === "STATEMENT_WITHOUT_LEDGER" ? "Buscar no Razão" : "Buscar no Extrato"}
                               </button>
                             )}
                             <button

@@ -45,6 +45,18 @@ export function EvidenceDrawer({
                 Conciliar manual
               </button>
             )}
+            {(selected.status === "STATEMENT_WITHOUT_LEDGER" || selected.status === "LEDGER_WITHOUT_STATEMENT") && onOpenManualMatch && (
+              <button
+                type="button"
+                className="button btn-sm"
+                onClick={() => {
+                  onClose();
+                  onOpenManualMatch(selected);
+                }}
+              >
+                {selected.status === "STATEMENT_WITHOUT_LEDGER" ? "Buscar no Razão" : "Buscar no Extrato"}
+              </button>
+            )}
             <button type="button" className="close-button" onClick={onClose}>×</button>
           </div>
         </div>

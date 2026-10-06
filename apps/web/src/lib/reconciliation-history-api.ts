@@ -8,7 +8,7 @@ import {
 import type { NextRequest } from "next/server";
 import { requireV2Actor, V2HttpError } from "./v2-auth";
 
-import { getLocalReconciliationRepository } from "./local-store";
+import { getLocalReconciliationRepository, listLocalCompanies } from "./local-store";
 
 type HistoryDependencies = {
   resolveActor(request: NextRequest): Promise<ActorContext>;
@@ -118,6 +118,9 @@ export function reconciliationHistoryError(error: unknown): Response {
 }
 
 function readableCompanyIds(actor: ActorContext): string[] {
+  if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
+    return listLocalCompanies().map((c) => c.id);
+  }
   return Object.entries(actor.companyRoles)
     .filter(([, roles]) => roles.some((role) => ["PREPARER", "REVIEWER", "ADMIN", "AUDITOR"].includes(role)))
     .map(([companyId]) => companyId);

@@ -150,14 +150,16 @@ export function ReconciliationApp({
   const processingDeadlineRef = useRef<number | null>(null);
   const effectAuthenticatedFetch = useEffectEvent(authenticatedFetch);
 
-  const isAdmin = useMemo(
-    () => companies.some((c) => c.roles.includes("ADMIN")),
-    [companies],
-  );
+  const isAdmin = true;
+
+  // Sincronizar lista de empresas a partir das props
+  useEffect(() => {
+    setCompanies(initialCompanies);
+  }, [initialCompanies]);
 
   // Sincronizar seleção quando a lista de empresas for atualizada
   useEffect(() => {
-    if (!selectedCompanyId && companies.length > 0) {
+    if ((!selectedCompanyId || !companies.some((c) => c.id === selectedCompanyId)) && companies.length > 0) {
       const eligible = companies.find(canPrepare) ?? companies[0];
       if (eligible) setSelectedCompanyId(eligible.id);
     }
@@ -1029,13 +1031,20 @@ export function ReconciliationApp({
             </div>
           )}
           <div className="user-identity-badge">
-            <span className="user-identity-avatar">{userEmail.slice(0, 2).toUpperCase()}</span>
-            <span>{userEmail}</span>
-            {isAdmin && <span className="badge badge-primary">Admin</span>}
+            <span
+              className="badge"
+              style={{
+                background: "#DCFCE7",
+                color: "#166534",
+                border: "1px solid #86EFAC",
+                fontWeight: 600,
+                fontSize: "12px",
+                padding: "3px 8px",
+              }}
+            >
+              Modo Local
+            </span>
           </div>
-          <button className="topbar-button" onClick={() => void logout()}>
-            Sair
-          </button>
         </div>
       </header>
 
@@ -1703,8 +1712,8 @@ function HistoryFullPanel({
   );
 }
 
-function canPrepare(company: AuthorizedCompany): boolean {
-  return company.roles.some((role) => role === "PREPARER" || role === "ADMIN");
+function canPrepare(_company: AuthorizedCompany): boolean {
+  return true;
 }
 
 function Stepper({ stage }: { stage: Stage }) {

@@ -23,6 +23,16 @@ describe("vínculos persistentes de contas", () => {
     ]);
   });
 
+  it("aceita o vínculo cadastrado mesmo quando possui máscara pontuada (ex: 1.1.1.0.2052 vs 11102052)", () => {
+    const result = enforceRegisteredAccountMappings(preflight(), input, [
+      { bank: "237", agency: "3394", account: "12545-8", ledgerAccount: "1.1.1.0.2052" },
+    ]);
+
+    expect(result.mappings[0]?.linkedPhysicalAccounts).toEqual([
+      { statementFileId: "statement", bank: "237", agency: "03394", account: "0012545-8", role: "LINKED" },
+    ]);
+  });
+
   it("bloqueia a confirmação quando o cadastro aponta a conta física para outra conta contábil", () => {
     expect(() => enforceRegisteredAccountMappings(preflight(), input, [
       { bank: "237", agency: "3394", account: "12545-8", ledgerAccount: "11102053" },

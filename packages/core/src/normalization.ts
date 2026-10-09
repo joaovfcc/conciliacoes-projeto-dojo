@@ -343,19 +343,57 @@ export function parseDate(value: unknown): string {
     }
   }
 
-  let match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
-  if (match) return validateDate(`${match[3]}-${match[2]}-${match[1]}`);
-  match = /^(\d{2})\/(\d{2})\/(\d{2})$/.exec(text);
-  if (match) {
-    const year = Number(match[3]) < 70 ? `20${match[3]}` : `19${match[3]}`;
-    return validateDate(`${year}-${match[2]}-${match[1]}`);
+  // 1. ISO format: YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+  const isoMatch = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(text);
+  if (isoMatch) {
+    const y = isoMatch[1]!;
+    const m = isoMatch[2]!.padStart(2, "0");
+    const d = isoMatch[3]!.padStart(2, "0");
+    return validateDate(`${y}-${m}-${d}`);
   }
-  match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(text);
-  if (match) return validateDate(`${match[3]}-${match[2]}-${match[1]}`);
-  match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-  if (match) return validateDate(text);
-  match = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
-  if (match) return validateDate(`${match[1]}-${match[2]}-${match[3]}`);
+
+  // 2. Compact YYYYMMDD
+  const compactMatch = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
+  if (compactMatch) {
+    return validateDate(`${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`);
+  }
+
+  // 3. Delimited dates: D/M/Y or M/D/Y with /, -, or . (1 or 2 digits day/month, 2 or 4 digits year)
+  const delimitedMatch = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/.exec(text);
+  if (delimitedMatch) {
+    const n1 = Number(delimitedMatch[1]);
+    const n2 = Number(delimitedMatch[2]);
+    const rawYear = delimitedMatch[3]!;
+    const year = rawYear.length === 2
+      ? (Number(rawYear) < 70 ? 2000 + Number(rawYear) : 1900 + Number(rawYear))
+      : Number(rawYear);
+
+    // Disambiguation between DD/MM/YYYY and MM/DD/YYYY
+    if (n1 > 12 && n2 <= 12) {
+      // First is day (>12), second is month (standard BR)
+      const m = String(n2).padStart(2, "0");
+      const d = String(n1).padStart(2, "0");
+      return validateDate(`${year}-${m}-${d}`);
+    } else if (n2 > 12 && n1 <= 12) {
+      // First is month, second is day (>12, US style e.g. 12/31/25)
+      const m = String(n1).padStart(2, "0");
+      const d = String(n2).padStart(2, "0");
+      return validateDate(`${year}-${m}-${d}`);
+    } else {
+      // Both <= 12: try standard Brazilian DD/MM/YYYY first
+      const m1 = String(n2).padStart(2, "0");
+      const d1 = String(n1).padStart(2, "0");
+      try {
+        return validateDate(`${year}-${m1}-${d1}`);
+      } catch {
+        // Fallback to MM/DD/YYYY if DD/MM was invalid
+        const m2 = String(n1).padStart(2, "0");
+        const d2 = String(n2).padStart(2, "0");
+        return validateDate(`${year}-${m2}-${d2}`);
+      }
+    }
+  }
+
   throw new Error(`Data inválida: ${text || "ausente"}.`);
 }
 
@@ -365,6 +403,38 @@ function validateDate(value: string): string {
     throw new Error(`Data inválida: ${value}.`);
   }
   return value;
+}
+
+/**
+ * Normaliza códigos de conta contábil removendo caracteres de máscara (pontos, traços, barras)
+ * e espaços em branco para permitir comparação resiliente entre ERPs e cadastros.
+ */
+export function normalizeLedgerAccount(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^0-9A-Z]/g, "");
+}
+
+/**
+ * Compara duas contas contábeis ignorando pontuação de máscara (ex: "1.1.1.0.2027" === "11102027").
+ * Se ambos forem puramente numéricos, também tolera zeros à esquerda não significativos.
+ */
+export function ledgerAccountsMatch(left: unknown, right: unknown): boolean {
+  const normLeft = normalizeLedgerAccount(left);
+  const normRight = normalizeLedgerAccount(right);
+
+  if (!normLeft || !normRight) return false;
+  if (normLeft === normRight) return true;
+
+  // Se forem puramente numéricos, comparar sem zeros à esquerda
+  if (/^\d+$/.test(normLeft) && /^\d+$/.test(normRight)) {
+    const unpaddedLeft = normLeft.replace(/^0+/, "");
+    const unpaddedRight = normRight.replace(/^0+/, "");
+    return (unpaddedLeft || "0") === (unpaddedRight || "0");
+  }
+
+  return false;
 }
 
 export function periodOf(value: string): string {

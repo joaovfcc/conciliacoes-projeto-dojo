@@ -543,15 +543,20 @@ export class ReconciliationEngine {
     }
 
     if (this.options.matchByUniqueValueWithinPeriod) {
-      for (const pair of uniqueValuePairs(open(prepared, available))) {
+      for (const pair of uniqueValuePairs(open(prepared, available), this.dateToleranceDays, configuration)) {
         if (available.has(pair.bank.id) && available.has(pair.ledger.id)) {
+          const type: MatchGroupType = pair.matchType ?? (pair.sameDate ? "exact" : "unique-value");
+          const status: ReconciliationStatus = type === "exact" ? "RECONCILED_EXACT"
+            : type === "date-window" ? "RECONCILED_DATE_WINDOW"
+            : "RECONCILED_UNIQUE_VALUE";
+          const ruleId: MatchRuleId = type === "date-window" ? "RF-03" : "RF-02";
           accept(
-            "RF-02",
-            pair.sameDate ? "exact" : "unique-value",
+            ruleId,
+            type,
             [pair.bank],
             [pair.ledger],
-            pair.sameDate ? "RECONCILED_EXACT" : "RECONCILED_UNIQUE_VALUE",
-            1,
+            status,
+            pair.score ?? 1,
           );
         }
       }
@@ -799,9 +804,15 @@ type UniqueValuePair = {
   bank: PreparedTransaction;
   ledger: PreparedTransaction;
   sameDate: boolean;
+  score?: number;
+  matchType?: "exact" | "unique-value" | "date-window";
 };
 
-function uniqueValuePairs(transactions: PreparedTransaction[]): UniqueValuePair[] {
+function uniqueValuePairs(
+  transactions: PreparedTransaction[],
+  dateToleranceDays = 0,
+  configuration: ReconciliationConfigurationV1 = RECONCILIATION_CONFIGURATION_V1,
+): UniqueValuePair[] {
   const pairs: UniqueValuePair[] = [];
   const buckets = indexTransactions(transactions, financialKey);
   for (const key of [...buckets.keys()].sort()) {
@@ -809,6 +820,8 @@ function uniqueValuePairs(transactions: PreparedTransaction[]): UniqueValuePair[
     const bank = entries.filter((item) => item.source === "BANK");
     const ledger = entries.filter((item) => item.source === "LEDGER");
     const pairedIds = new Set<string>();
+
+    // Pass 1: 1:1 Document matching
     const banksByDocument = indexTransactions(bank.filter((item) => Boolean(item.documentId)), documentKey);
     const ledgersByDocument = indexTransactions(ledger.filter((item) => Boolean(item.documentId)), documentKey);
 
@@ -818,19 +831,180 @@ function uniqueValuePairs(transactions: PreparedTransaction[]): UniqueValuePair[
       if (bankMatches.length !== 1 || ledgerMatches.length !== 1) continue;
       const bankMatch = bankMatches[0]!;
       const ledgerMatch = ledgerMatches[0]!;
-      pairs.push({ bank: bankMatch, ledger: ledgerMatch, sameDate: bankMatch.postingDate === ledgerMatch.postingDate });
+      const sameDate = bankMatch.postingDate === ledgerMatch.postingDate;
+      pairs.push({
+        bank: bankMatch,
+        ledger: ledgerMatch,
+        sameDate,
+        score: 1,
+        matchType: sameDate ? "exact" : "unique-value",
+      });
       pairedIds.add(bankMatch.id);
       pairedIds.add(ledgerMatch.id);
     }
 
+    // Pass 2: Same-Date Matching (Exact Date)
+    const openBankForDate = bank.filter((item) => !pairedIds.has(item.id));
+    const openLedgerForDate = ledger.filter((item) => !pairedIds.has(item.id));
+    const banksByDate = indexTransactions(openBankForDate, (item) => item.postingDate);
+    const ledgersByDate = indexTransactions(openLedgerForDate, (item) => item.postingDate);
+
+    const allDates = [...new Set([...banksByDate.keys(), ...ledgersByDate.keys()])].sort();
+    for (const date of allDates) {
+      const dateBanks = (banksByDate.get(date) ?? []).filter((item) => !pairedIds.has(item.id));
+      const dateLedgers = (ledgersByDate.get(date) ?? []).filter((item) => !pairedIds.has(item.id));
+      if (dateBanks.length === 0 || dateLedgers.length === 0) continue;
+
+      // 2A: Exactly 1:1 on this specific date
+      if (dateBanks.length === 1 && dateLedgers.length === 1) {
+        const b = dateBanks[0]!;
+        const l = dateLedgers[0]!;
+        if (!hasDivergentDocument(b, l)) {
+          const score = transactionSimilarity(b, l);
+          pairs.push({ bank: b, ledger: l, sameDate: true, score, matchType: "exact" });
+          pairedIds.add(b.id);
+          pairedIds.add(l.id);
+        }
+        continue;
+      }
+
+      // 2B: Multiple on date - evaluate token similarity / supplier match
+      const availableDateLedgers = dateLedgers.filter((l) => !pairedIds.has(l.id));
+      const availableDateBanks = dateBanks.filter((b) => !pairedIds.has(b.id));
+
+      type CandidatePair = { bank: PreparedTransaction; ledger: PreparedTransaction; score: number };
+      const candidatePairs: CandidatePair[] = [];
+
+      for (const b of availableDateBanks) {
+        if (b.comparisonTokens.length === 0) continue;
+        const rankedLedgers = availableDateLedgers
+          .filter((l) => !hasDivergentDocument(b, l))
+          .map((l) => ({ ledger: l, score: transactionSimilarity(b, l) }))
+          .sort((x, y) => y.score - x.score || compareTransactions(x.ledger, y.ledger));
+
+        if (rankedLedgers.length === 0) continue;
+        const best = rankedLedgers[0]!;
+        const secondScore = rankedLedgers.length > 1 ? rankedLedgers[1]!.score : 0;
+
+        if (
+          best.score >= configuration.rf03.minimumScore &&
+          (rankedLedgers.length === 1 || best.score - secondScore >= configuration.rf03.minimumMargin)
+        ) {
+          const rankedBanks = availableDateBanks
+            .filter((candidateBank) => !hasDivergentDocument(candidateBank, best.ledger))
+            .map((candidateBank) => ({ bank: candidateBank, score: transactionSimilarity(candidateBank, best.ledger) }))
+            .sort((x, y) => y.score - x.score || compareTransactions(x.bank, y.bank));
+
+          if (rankedBanks.length > 0 && rankedBanks[0]!.bank.id === b.id) {
+            const secondBankScore = rankedBanks.length > 1 ? rankedBanks[1]!.score : 0;
+            if (rankedBanks.length === 1 || rankedBanks[0]!.score - secondBankScore >= configuration.rf03.minimumMargin) {
+              candidatePairs.push({ bank: b, ledger: best.ledger, score: best.score });
+            }
+          }
+        }
+      }
+
+      candidatePairs.sort((x, y) => y.score - x.score || compareTransactions(x.bank, y.bank));
+      for (const pair of candidatePairs) {
+        if (!pairedIds.has(pair.bank.id) && !pairedIds.has(pair.ledger.id)) {
+          pairs.push({ bank: pair.bank, ledger: pair.ledger, sameDate: true, score: pair.score, matchType: "exact" });
+          pairedIds.add(pair.bank.id);
+          pairedIds.add(pair.ledger.id);
+        }
+      }
+    }
+
+    // Pass 3: Date Tolerance Window (if dateToleranceDays > 0)
+    if (dateToleranceDays > 0) {
+      const openBankForWindow = bank.filter((item) => !pairedIds.has(item.id));
+      const openLedgerForWindow = ledger.filter((item) => !pairedIds.has(item.id));
+
+      for (const b of openBankForWindow) {
+        if (pairedIds.has(b.id)) continue;
+        const windowLedgers = openLedgerForWindow
+          .filter((l) => !pairedIds.has(l.id) && dateDifference(b.postingDate, l.postingDate) <= dateToleranceDays && !hasDivergentDocument(b, l))
+          .map((l) => ({
+            ledger: l,
+            score: transactionSimilarity(b, l),
+            distance: dateDifference(b.postingDate, l.postingDate),
+          }))
+          .sort((x, y) => y.score - x.score || x.distance - y.distance || compareTransactions(x.ledger, y.ledger));
+
+        if (windowLedgers.length === 0) continue;
+
+        if (windowLedgers.length === 1) {
+          const onlyLedger = windowLedgers[0]!.ledger;
+          const reverseBanks = openBankForWindow.filter(
+            (candidateBank) =>
+              !pairedIds.has(candidateBank.id) &&
+              dateDifference(candidateBank.postingDate, onlyLedger.postingDate) <= dateToleranceDays &&
+              !hasDivergentDocument(candidateBank, onlyLedger),
+          );
+          if (reverseBanks.length === 1) {
+            pairs.push({
+              bank: b,
+              ledger: onlyLedger,
+              sameDate: b.postingDate === onlyLedger.postingDate,
+              score: windowLedgers[0]!.score,
+              matchType: "date-window",
+            });
+            pairedIds.add(b.id);
+            pairedIds.add(onlyLedger.id);
+          }
+        } else {
+          const best = windowLedgers[0]!;
+          const second = windowLedgers[1]!;
+          if (
+            best.score >= configuration.rf03.minimumScore &&
+            best.score - second.score >= configuration.rf03.minimumMargin
+          ) {
+            const reverseBanks = openBankForWindow
+              .filter(
+                (candidateBank) =>
+                  !pairedIds.has(candidateBank.id) &&
+                  dateDifference(candidateBank.postingDate, best.ledger.postingDate) <= dateToleranceDays &&
+                  !hasDivergentDocument(candidateBank, best.ledger),
+              )
+              .map((candidateBank) => ({
+                bank: candidateBank,
+                score: transactionSimilarity(candidateBank, best.ledger),
+                distance: dateDifference(candidateBank.postingDate, best.ledger.postingDate),
+              }))
+              .sort((x, y) => y.score - x.score || x.distance - y.distance || compareTransactions(x.bank, y.bank));
+
+            if (reverseBanks.length > 0 && reverseBanks[0]!.bank.id === b.id) {
+              const secondBank = reverseBanks.length > 1 ? reverseBanks[1]! : undefined;
+              if (!secondBank || reverseBanks[0]!.score - secondBank.score >= configuration.rf03.minimumMargin) {
+                pairs.push({
+                  bank: b,
+                  ledger: best.ledger,
+                  sameDate: b.postingDate === best.ledger.postingDate,
+                  score: best.score,
+                  matchType: "date-window",
+                });
+                pairedIds.add(b.id);
+                pairedIds.add(best.ledger.id);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Pass 4: Unique Value in Period (Residual 1:1)
     const remainingBank = bank.filter((item) => !pairedIds.has(item.id));
     const remainingLedger = ledger.filter((item) => !pairedIds.has(item.id));
     if (remainingBank.length === 1 && remainingLedger.length === 1 && !hasDivergentDocument(remainingBank[0]!, remainingLedger[0]!)) {
+      const sameDate = remainingBank[0]!.postingDate === remainingLedger[0]!.postingDate;
       pairs.push({
         bank: remainingBank[0]!,
         ledger: remainingLedger[0]!,
-        sameDate: remainingBank[0]!.postingDate === remainingLedger[0]!.postingDate,
+        sameDate,
+        score: transactionSimilarity(remainingBank[0]!, remainingLedger[0]!),
+        matchType: sameDate ? "exact" : "unique-value",
       });
+      pairedIds.add(remainingBank[0]!.id);
+      pairedIds.add(remainingLedger[0]!.id);
     }
   }
   return pairs;

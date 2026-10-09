@@ -133,4 +133,74 @@ describe("Gemini Layout Detector & Dynamic Profile", () => {
     expect(ledgerResult.records[1]!.date).toBe("2026-01-10");
     expect(ledgerResult.records[2]!.date).toBe("2026-01-10");
   });
+
+  it("should successfully call DeepSeek API when DEEPSEEK_API_KEY is configured", async () => {
+    process.env.DEEPSEEK_API_KEY = "test-deepseek-key";
+    delete process.env.GEMINI_API_KEY;
+
+    const buffer = await createXlsxBuffer("Extrato_Deepseek_Test", [
+      ["Data Movimento", "Histórico", "Documento", "Valor"],
+      ["02/01/2026", "LANCAMENTO TESTE", "DOC01", "-150.00"],
+    ]);
+
+    const doc = parseSpreadsheet({ buffer, sourceFormat: "XLSX", fileName: "test.xlsx" });
+    const sheet = doc.sheets[0]!;
+
+    const mockResponsePayload = {
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              confidence: "HIGH",
+              headerRowIndex: 0,
+              columns: {
+                date: 0,
+                description: 1,
+                document: 2,
+                amount: 3,
+                debit: null,
+                credit: null,
+                balance: null,
+                dcIndicator: null,
+                account: null,
+              },
+              rules: {
+                valueMode: "SINGLE_SIGNED",
+                accountIsBlockHeader: false,
+                inheritDateIfEmpty: false,
+              },
+              metadata: {
+                bank: "341",
+              },
+            }),
+          },
+        },
+      ],
+    };
+
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponsePayload,
+    });
+    globalThis.fetch = fetchMock as any;
+
+    try {
+      const result = await detectLayoutWithGemini(sheet, "STATEMENT");
+      expect(result).not.toBeNull();
+      expect(result?.source).toBe("DEEPSEEK_AI");
+      expect(result?.columns.date).toBe(0);
+      expect(result?.columns.description).toBe(1);
+      expect(result?.columns.amount).toBe(3);
+      expect(fetchMock).toHaveBeenCalled();
+      const [calledUrl, calledOpts] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(calledUrl).toBe("https://api.deepseek.com/chat/completions");
+      expect(calledOpts.headers).toMatchObject({
+        Authorization: "Bearer test-deepseek-key",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.DEEPSEEK_API_KEY;
+    }
+  });
 });

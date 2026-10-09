@@ -26,12 +26,38 @@ import type { SessionStore } from "./session-store.js";
 import type { ReconciliationSession, StoredFile } from "./types.js";
 
 export class RuntimeServices {
+  private readonly localTasksInFlight = new Set<Promise<void>>();
+
   constructor(
     readonly config: RuntimeConfig,
     readonly sessions: SessionStore,
     readonly objects: ObjectStore,
     readonly completedReconciliations: CompletedReconciliationRepository,
   ) { }
+
+  private dispatchLocalTask(task: () => Promise<void>): void {
+    const promise = new Promise<void>((resolve) => {
+      setImmediate(async () => {
+        try {
+          await task();
+        } catch (error) {
+          safeMetric("local_task_failed", { error: error instanceof Error ? error.message : "unknown" });
+        } finally {
+          resolve();
+        }
+      });
+    });
+    this.localTasksInFlight.add(promise);
+    void promise.finally(() => {
+      this.localTasksInFlight.delete(promise);
+    });
+  }
+
+  async drainLocalTasks(): Promise<void> {
+    while (this.localTasksInFlight.size > 0) {
+      await Promise.allSettled([...this.localTasksInFlight]);
+    }
+  }
 
   createAdvisor(): LlmMatchAdvisor {
     if (
@@ -94,7 +120,20 @@ export class RuntimeServices {
   }
 
   async enqueuePreflight(session: ReconciliationSession): Promise<void> {
-    if (!this.config.redisUrl) { await this.preflight(session); return; }
+    if (!this.config.redisUrl) {
+      session.status = "QUEUED";
+      session.pendingAction = "PREFLIGHT";
+      session.progress = 10;
+      session.progressMessage = "Pré-análise aguardando processamento.";
+      await this.sessions.save(session);
+      this.dispatchLocalTask(async () => {
+        const current = await this.sessions.get(session.id);
+        if (current && !current.closed && current.status !== "FAILED") {
+          await this.preflight(current);
+        }
+      });
+      return;
+    }
     const queue = processingQueue(this.config.redisUrl);
     try {
       await assertWorkerAvailable(queue);
@@ -211,7 +250,17 @@ export class RuntimeServices {
       const claim = await claimConfirmation(this.sessions, session.id, confirmation);
       const current = await activeSession(this.sessions, session.id);
       if (claim === "SAME" && ["RECONCILING", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(current.status)) return;
-      await this.process(current, confirmation);
+      current.status = "QUEUED";
+      current.pendingAction = "PROCESS";
+      current.progress = 50;
+      current.progressMessage = "Execução aguardando processamento.";
+      await this.sessions.save(current);
+      this.dispatchLocalTask(async () => {
+        const latest = await this.sessions.get(session.id);
+        if (latest && !latest.closed && latest.status !== "FAILED") {
+          await this.process(latest, confirmation);
+        }
+      });
       return;
     }
     const queue = processingQueue(this.config.redisUrl);

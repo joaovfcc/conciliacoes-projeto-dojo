@@ -54,3 +54,4 @@ coverage/
 /packages/core/reports/
 .local-storage/
 .sessions/
+layout/

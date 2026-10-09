@@ -384,6 +384,48 @@ describe("ReconciliationApp", () => {
     fireEvent.click(reconciledTab);
     expect(screen.getByText(/Manual/)).toBeInTheDocument();
   });
+
+  it("permite remover arquivos de razão e extratos adicionados na etapa de arquivos", () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "Nova conciliação" }));
+
+    const ledgerInput = screen.getByLabelText("Razão Protheus") as HTMLInputElement;
+    const statementsInput = screen.getByLabelText("Extratos bancários") as HTMLInputElement;
+
+    const fileLedger = new File(["ledger-content"], "razao.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const fileStatement1 = new File(["stmt-1"], "extrato1.ofx", { type: "text/plain" });
+    const fileStatement2 = new File(["stmt-2"], "extrato2.ofx", { type: "text/plain" });
+
+    // Adiciona razão
+    fireEvent.change(ledgerInput, { target: { files: [fileLedger] } });
+    expect(screen.getByText("razao.xlsx")).toBeInTheDocument();
+
+    // Adiciona extratos
+    fireEvent.change(statementsInput, { target: { files: [fileStatement1, fileStatement2] } });
+    expect(screen.getByText("extrato1.ofx")).toBeInTheDocument();
+    expect(screen.getByText("extrato2.ofx")).toBeInTheDocument();
+
+    // Remove extrato1.ofx
+    const removeButtons = screen.getAllByRole("button", { name: "Remover" });
+    expect(removeButtons).toHaveLength(3);
+
+    // Clica para remover extrato1.ofx (segundo botão)
+    fireEvent.click(removeButtons[1]!);
+    expect(screen.queryByText("extrato1.ofx")).not.toBeInTheDocument();
+    expect(screen.getByText("extrato2.ofx")).toBeInTheDocument();
+    expect(screen.getByText("razao.xlsx")).toBeInTheDocument();
+
+    // Remove o razão
+    const removeLedgerBtn = screen.getAllByRole("button", { name: "Remover" })[0]!;
+    fireEvent.click(removeLedgerBtn);
+    expect(screen.queryByText("razao.xlsx")).not.toBeInTheDocument();
+    expect(screen.getByText("extrato2.ofx")).toBeInTheDocument();
+
+    // Verifica que o input value foi resetado permitindo selecionar o mesmo arquivo novamente
+    expect(ledgerInput.value).toBe("");
+    fireEvent.change(ledgerInput, { target: { files: [fileLedger] } });
+    expect(screen.getByText("razao.xlsx")).toBeInTheDocument();
+  });
 });
 
 function renderApp(authenticatedFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))) {

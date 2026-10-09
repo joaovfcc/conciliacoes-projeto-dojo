@@ -11,7 +11,7 @@ import type {
   SignProfile,
   StatementRecord,
 } from "@conciliacao/core";
-import { bankAccountsMatch, compareBankAccountIdentities } from "@conciliacao/core/normalization";
+import { bankAccountsMatch, compareBankAccountIdentities, ledgerAccountsMatch } from "@conciliacao/core/normalization";
 import {
   bankLabel,
   documentKindLabel,
@@ -30,6 +30,7 @@ import { EvidenceDrawer } from "./evidence-drawer";
 import { AdminUsersPanel } from "./admin-users-panel";
 import { CompaniesAccountsPanel } from "./companies-accounts-panel";
 import { ManualMatchModal } from "./manual-match-modal";
+import { BidirectionalMatchModal } from "./bidirectional-match-modal";
 
 type View = "RECONCILIATION" | "HISTORY" | "COMPANIES_ACCOUNTS" | "USERS";
 type Stage = "WELCOME" | "FILES" | "PREFLIGHT" | "CONFIRM" | "PROCESSING" | "RESULTS";
@@ -138,6 +139,8 @@ export function ReconciliationApp({
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyRecordId, setHistoryRecordId] = useState<string | null>(null);
   const [manualMatchItem, setManualMatchItem] = useState<ReconciliationResult | null>(null);
+  const [bidirectionalMatchAnchor, setBidirectionalMatchAnchor] = useState<ReconciliationResult | null>(null);
+  const [isBidirectionalMatchOpen, setIsBidirectionalMatchOpen] = useState(false);
   const [preflightStatusText, setPreflightStatusText] = useState("Validando conteúdo e identificando contas contábeis e bancárias.");
   const [preflightProgress, setPreflightProgress] = useState(20);
   const [preflightActiveStep, setPreflightActiveStep] = useState<"UPLOAD" | "PARSING" | "MAPPING">("UPLOAD");
@@ -147,14 +150,16 @@ export function ReconciliationApp({
   const processingDeadlineRef = useRef<number | null>(null);
   const effectAuthenticatedFetch = useEffectEvent(authenticatedFetch);
 
-  const isAdmin = useMemo(
-    () => companies.some((c) => c.roles.includes("ADMIN")),
-    [companies],
-  );
+  const isAdmin = true;
+
+  // Sincronizar lista de empresas a partir das props
+  useEffect(() => {
+    setCompanies(initialCompanies);
+  }, [initialCompanies]);
 
   // Sincronizar seleção quando a lista de empresas for atualizada
   useEffect(() => {
-    if (!selectedCompanyId && companies.length > 0) {
+    if ((!selectedCompanyId || !companies.some((c) => c.id === selectedCompanyId)) && companies.length > 0) {
       const eligible = companies.find(canPrepare) ?? companies[0];
       if (eligible) setSelectedCompanyId(eligible.id);
     }
@@ -218,8 +223,14 @@ export function ReconciliationApp({
         const { session: current } = await readResponse<{ session: PublicSession }>(response);
         pollingFailuresRef.current = 0;
         setSession(current);
-        if (stage === "PREFLIGHT" && current.preflight) showPreflight(current.preflight);
-        else if (current.result) {
+        if (stage === "PREFLIGHT") {
+          if (current.preflight) {
+            showPreflight(current.preflight);
+          } else {
+            if (current.progressMessage) setPreflightStatusText(current.progressMessage);
+            if (current.progress) setPreflightProgress((prev) => Math.max(prev, current.progress));
+          }
+        } else if (current.result) {
           confirmationAttemptRef.current = null;
           processingDeadlineRef.current = null;
           setResult(current.result);
@@ -230,13 +241,13 @@ export function ReconciliationApp({
           setStage("FILES");
         } else if (processingDeadlineRef.current && Date.now() >= processingDeadlineRef.current) {
           setError("O processamento excedeu o tempo máximo de espera. Verifique os arquivos e tente novamente.");
-          setStage(stage === "PREFLIGHT" ? "FILES" : "CONFIRM");
+          setStage("CONFIRM");
         }
       } catch (exception) {
         pollingFailuresRef.current += 1;
         if (pollingFailuresRef.current >= maximumStatusFailures) {
           setError(`${messageOf(exception)} A verificação foi interrompida para evitar carregamento indefinido; tente novamente.`);
-          setStage(stage === "PREFLIGHT" ? "FILES" : "CONFIRM");
+          setStage("CONFIRM");
         }
       } finally {
         pollingInFlightRef.current = false;
@@ -362,7 +373,13 @@ export function ReconciliationApp({
       const body = await readResponse<{ session: PublicSession }>(response);
       setSession(body.session);
       const detected = body.session.preflight;
-      if (detected) showPreflight(detected);
+      if (detected) {
+        showPreflight(detected);
+      } else if (body.session.status === "QUEUED" || body.session.status === "PREFLIGHT") {
+        setPreflightActiveStep("PARSING");
+        setPreflightProgress((prev) => Math.max(prev, body.session.progress ?? 80));
+        setPreflightStatusText(body.session.progressMessage || "Identificando estrutura, leiautes e contas...");
+      }
     } catch (exception) {
       if (activeCredential) {
         try {
@@ -377,8 +394,8 @@ export function ReconciliationApp({
               showPreflight(checkData.session.preflight);
               return;
             }
-            if (checkData.session?.status === "PREFLIGHT") {
-              setPreflightStatusText("A leitura dos arquivos continua em andamento no servidor. Aguarde...");
+            if (["PREFLIGHT", "QUEUED", "EXTRACTING", "OCR_PROCESSING"].includes(checkData.session?.status ?? "")) {
+              setPreflightStatusText(checkData.session?.progressMessage || "A leitura dos arquivos continua em andamento no servidor. Aguarde...");
               return;
             }
           }
@@ -460,6 +477,7 @@ export function ReconciliationApp({
               return;
             }
             if (["RECONCILING", "VALIDATING", "EXTRACTING", "OCR_PROCESSING", "QUEUED"].includes(checkData.session?.status ?? "")) {
+              setStage("PROCESSING");
               return;
             }
           }
@@ -529,6 +547,8 @@ export function ReconciliationApp({
     setError("");
     setHistoryRecordId(null);
     setManualMatchItem(null);
+    setBidirectionalMatchAnchor(null);
+    setIsBidirectionalMatchOpen(false);
   }
 
   async function openHistory(id: string): Promise<void> {
@@ -780,6 +800,171 @@ export function ReconciliationApp({
     }
   }
 
+  async function handleBidirectionalMatch(
+    selectedStatementIds: string[],
+    selectedLedgerIds: string[],
+    justification?: string,
+  ): Promise<void> {
+    if (!result || selectedStatementIds.length === 0 || selectedLedgerIds.length === 0) return;
+
+    const stmtIdSet = new Set(selectedStatementIds);
+    const ledgIdSet = new Set(selectedLedgerIds);
+
+    const foundStatements: StatementRecord[] = [];
+    const foundLedgers: LedgerRecord[] = [];
+    const seenS = new Set<string>();
+    const seenL = new Set<string>();
+
+    for (const r of result.results) {
+      const rowStmts = r.statements ?? (r.statement ? [r.statement] : []);
+      for (const s of rowStmts) {
+        if (stmtIdSet.has(s.id) && !seenS.has(s.id)) {
+          seenS.add(s.id);
+          foundStatements.push(s);
+        }
+      }
+      const rowLedgs = r.ledgers ?? (r.ledger ? [r.ledger] : []);
+      for (const l of rowLedgs) {
+        if (ledgIdSet.has(l.id) && !seenL.has(l.id)) {
+          seenL.add(l.id);
+          foundLedgers.push(l);
+        }
+      }
+    }
+
+    if (foundStatements.length === 0 || foundLedgers.length === 0) return;
+
+    const totalStmtCents = foundStatements.reduce((acc, s) => acc + Math.round(Number(s.value) * 100), 0);
+    const totalLedgCents = foundLedgers.reduce((acc, l) => acc + Math.round(Number(l.value) * 100), 0);
+    const diffCents = Math.abs(totalStmtCents - totalLedgCents);
+    const diffVal = (diffCents / 100).toFixed(2);
+    const isGroup = foundStatements.length > 1 || foundLedgers.length > 1;
+
+    let daysDiff = 0;
+    if (foundStatements.length === 1 && foundLedgers.length === 1) {
+      try {
+        const t1 = new Date(`${foundStatements[0]!.date.slice(0, 10)}T00:00:00.000Z`).getTime();
+        const t2 = new Date(`${foundLedgers[0]!.date.slice(0, 10)}T00:00:00.000Z`).getTime();
+        if (!Number.isNaN(t1) && !Number.isNaN(t2)) {
+          daysDiff = Math.round(Math.abs(t1 - t2) / (1000 * 60 * 60 * 24));
+        }
+      } catch {
+        daysDiff = 0;
+      }
+    }
+
+    const primaryStatus = isGroup
+      ? "AUTO_MATCH_GROUP"
+      : diffCents === 0
+      ? "AUTO_MATCH_EXACT"
+      : "AUTO_MATCH_DATE_TOLERANCE";
+
+    const reasonText = justification?.trim()
+      ? `Conciliado manualmente: ${justification.trim()}`
+      : isGroup
+      ? `Conciliado manualmente em grupo pelo usuário (${foundStatements.length} extrato × ${foundLedgers.length} razão).`
+      : "Conciliado manualmente pelo usuário entre pendências de extrato e razão.";
+
+    const primaryReconciled: ReconciliationResult = {
+      id: isGroup
+        ? `MANUAL_GROUP_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+        : `MANUAL_${foundStatements[0]!.id}_${foundLedgers[0]!.id}`,
+      status: primaryStatus,
+      rule: isGroup ? "MANUAL_GROUP" : "MANUAL",
+      decisionLevel: "AUTOMATIC",
+      reason: reasonText,
+      ledger: foundLedgers[0]!,
+      statement: foundStatements[0]!,
+      ledgers: foundLedgers,
+      statements: foundStatements,
+      valueTolerance: diffVal,
+      valueDifference: diffVal,
+      dateDifference: daysDiff,
+      ruleVersion: "2.0-manual",
+    };
+
+    const updatedResultsList = result.results.filter((r) => {
+      if (r.status === "STATEMENT_WITHOUT_LEDGER") {
+        if (r.statement && stmtIdSet.has(r.statement.id)) return false;
+        if (r.statements && r.statements.some((s) => stmtIdSet.has(s.id))) return false;
+        if (selectedStatementIds.some((id) => r.id === `STATEMENT_WITHOUT_LEDGER_${id}`)) return false;
+      }
+      if (r.status === "LEDGER_WITHOUT_STATEMENT") {
+        if (r.ledger && ledgIdSet.has(r.ledger.id)) return false;
+        if (r.ledgers && r.ledgers.some((l) => ledgIdSet.has(l.id))) return false;
+        if (selectedLedgerIds.some((id) => r.id === `LEDGER_WITHOUT_STATEMENT_${id}`)) return false;
+      }
+      return true;
+    });
+
+    updatedResultsList.push(primaryReconciled);
+
+    const ledgerAccountCounts = new Map<string, { ledgers: number; statements: number; ledgerVal: number }>();
+    for (const l of foundLedgers) {
+      const acct = l.ledgerAccount || "DEFAULT";
+      const curr = ledgerAccountCounts.get(acct) || { ledgers: 0, statements: 0, ledgerVal: 0 };
+      curr.ledgers += 1;
+      curr.ledgerVal += Number(l.value);
+      ledgerAccountCounts.set(acct, curr);
+    }
+    const primaryLedgerAccount = foundLedgers[0]?.ledgerAccount;
+    if (primaryLedgerAccount) {
+      const curr = ledgerAccountCounts.get(primaryLedgerAccount);
+      if (curr) {
+        curr.statements += foundStatements.length;
+      }
+    }
+
+    const updatedSummaries = result.summaries?.map((summary) => {
+      const countData = ledgerAccountCounts.get(summary.ledgerAccount);
+      if (countData || result.summaries.length === 1) {
+        const ledgersMatched = countData?.ledgers ?? foundLedgers.length;
+        const statementsMatched = countData?.statements ?? foundStatements.length;
+        const valueMatched = countData?.ledgerVal ?? (totalLedgCents / 100);
+
+        return {
+          ...summary,
+          reconciledCount: summary.reconciledCount + 1,
+          reconciledValue: (Number(summary.reconciledValue) + valueMatched).toFixed(2),
+          ledgerWithoutStatementCount: Math.max(0, summary.ledgerWithoutStatementCount - ledgersMatched),
+          statementWithoutLedgerCount: Math.max(0, summary.statementWithoutLedgerCount - statementsMatched),
+        };
+      }
+      return summary;
+    });
+
+    const updatedProcessingResult: ProcessingResult = {
+      ...result,
+      results: updatedResultsList,
+      ...(updatedSummaries ? { summaries: updatedSummaries } : {}),
+    };
+
+    setResult(updatedProcessingResult);
+    setIsBidirectionalMatchOpen(false);
+    setBidirectionalMatchAnchor(null);
+    if (selected && (stmtIdSet.has(selected.id) || ledgIdSet.has(selected.id))) {
+      setSelected(null);
+    }
+
+    try {
+      if (historyRecordId) {
+        await authenticatedFetch(`/api/reconciliation-history/${historyRecordId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ result: updatedProcessingResult }),
+        });
+      } else if (credential) {
+        await authenticatedFetch(`/api/sessions/${credential.id}/results`, {
+          method: "PATCH",
+          headers: { ...sessionHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ result: updatedProcessingResult }),
+        });
+      }
+    } catch (err) {
+      console.warn("Não foi possível persistir a conciliação manual no backend:", err);
+    }
+  }
+
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? companies[0];
 
   return (
@@ -846,13 +1031,20 @@ export function ReconciliationApp({
             </div>
           )}
           <div className="user-identity-badge">
-            <span className="user-identity-avatar">{userEmail.slice(0, 2).toUpperCase()}</span>
-            <span>{userEmail}</span>
-            {isAdmin && <span className="badge badge-primary">Admin</span>}
+            <span
+              className="badge"
+              style={{
+                background: "#DCFCE7",
+                color: "#166534",
+                border: "1px solid #86EFAC",
+                fontWeight: 600,
+                fontSize: "12px",
+                padding: "3px 8px",
+              }}
+            >
+              Modo Local
+            </span>
           </div>
-          <button className="topbar-button" onClick={() => void logout()}>
-            Sair
-          </button>
         </div>
       </header>
 
@@ -955,13 +1147,35 @@ export function ReconciliationApp({
                   busy={busy}
                   historyRecordId={historyRecordId}
                   onDeleteHistory={deleteHistory}
-                  onOpenManualMatch={(item) => setManualMatchItem(item)}
+                  onOpenManualMatch={(item) => {
+                    if (item.status === "STATEMENT_WITHOUT_LEDGER" || item.status === "LEDGER_WITHOUT_STATEMENT") {
+                      setBidirectionalMatchAnchor(item);
+                      setIsBidirectionalMatchOpen(true);
+                    } else {
+                      setManualMatchItem(item);
+                    }
+                  }}
+                  onOpenBidirectionalMatch={(item) => {
+                    setBidirectionalMatchAnchor(item);
+                    setIsBidirectionalMatchOpen(true);
+                  }}
                 />
                 {manualMatchItem && (
                   <ManualMatchModal
                     item={manualMatchItem}
                     onClose={() => setManualMatchItem(null)}
                     onConfirm={handleManualMatch}
+                  />
+                )}
+                {isBidirectionalMatchOpen && (
+                  <BidirectionalMatchModal
+                    anchorItem={bidirectionalMatchAnchor}
+                    allResults={result.results}
+                    onClose={() => {
+                      setIsBidirectionalMatchOpen(false);
+                      setBidirectionalMatchAnchor(null);
+                    }}
+                    onConfirm={handleBidirectionalMatch}
                   />
                 )}
               </>
@@ -1016,7 +1230,14 @@ export function ReconciliationApp({
       <EvidenceDrawer
         selected={selected}
         onClose={() => setSelected(null)}
-        onOpenManualMatch={(item) => setManualMatchItem(item)}
+        onOpenManualMatch={(item) => {
+          if (item.status === "STATEMENT_WITHOUT_LEDGER" || item.status === "LEDGER_WITHOUT_STATEMENT") {
+            setBidirectionalMatchAnchor(item);
+            setIsBidirectionalMatchOpen(true);
+          } else {
+            setManualMatchItem(item);
+          }
+        }}
       />
     </>
   );
@@ -1491,8 +1712,8 @@ function HistoryFullPanel({
   );
 }
 
-function canPrepare(company: AuthorizedCompany): boolean {
-  return company.roles.some((role) => role === "PREPARER" || role === "ADMIN");
+function canPrepare(_company: AuthorizedCompany): boolean {
+  return true;
 }
 
 function Stepper({ stage }: { stage: Stage }) {
@@ -1649,10 +1870,15 @@ function UploadBox({
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleRemove = (index: number) => {
+  const handleRemove = (event: React.MouseEvent, index: number) => {
+    event.stopPropagation();
+    event.preventDefault();
     const next = [...files];
     next.splice(index, 1);
     onFiles(next);
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
   };
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1663,6 +1889,9 @@ function UploadBox({
       onFiles(newFiles);
     }
     event.target.value = "";
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
   };
 
   const handleDrop = (event: React.DragEvent) => {
@@ -1673,6 +1902,9 @@ function UploadBox({
       onFiles([...files, ...droppedFiles]);
     } else if (droppedFiles.length > 0) {
       onFiles([droppedFiles[0]!]);
+    }
+    if (inputRef.current) {
+      inputRef.current.value = "";
     }
   };
 
@@ -1718,7 +1950,7 @@ function UploadBox({
                 type="button"
                 className="button danger btn-sm"
                 style={{ marginLeft: "8px", padding: "2px 6px" }}
-                onClick={() => handleRemove(i)}
+                onClick={(event) => handleRemove(event, i)}
               >
                 Remover
               </button>
@@ -2094,6 +2326,7 @@ function Results(props: {
   historyRecordId?: string | null;
   onDeleteHistory?: (id: string) => Promise<boolean>;
   onOpenManualMatch: (item: ReconciliationResult) => void;
+  onOpenBidirectionalMatch?: (item: ReconciliationResult | null) => void;
 }) {
   const [visibleCount, setVisibleCount] = useState(25);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -2329,6 +2562,33 @@ function Results(props: {
           <Investments entries={props.result.investments} />
         ) : (
           <>
+            {(props.activeTab === "EXTRATO_SEM_RAZAO" || props.activeTab === "RAZAO_SEM_EXTRATO") && props.onOpenBidirectionalMatch && (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  background: "#EFF6FF",
+                  border: "1px solid #BFDBFE",
+                  borderRadius: "8px",
+                  padding: "10px 14px",
+                  marginBottom: "12px",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ fontSize: "13px", color: "#1E40AF" }}>
+                  💡 <strong>Conciliação Manual Bidirecional:</strong> Localize e cruze pendências entre extrato e razão com filtros avançados de valor, data e histórico.
+                </div>
+                <button
+                  type="button"
+                  className="button btn-sm"
+                  onClick={() => props.onOpenBidirectionalMatch?.(null)}
+                >
+                  🔍 Abrir conciliação manual
+                </button>
+              </div>
+            )}
             {props.activeTab === "CONCILIADOS" && (
               <div className="subtabs-bar" role="toolbar" aria-label="Filtro de conciliados">
                 <button
@@ -2435,6 +2695,15 @@ function Results(props: {
                                 onClick={() => props.onOpenManualMatch(item)}
                               >
                                 Conciliar manual
+                              </button>
+                            )}
+                            {(item.status === "STATEMENT_WITHOUT_LEDGER" || item.status === "LEDGER_WITHOUT_STATEMENT") && props.onOpenBidirectionalMatch && (
+                              <button
+                                type="button"
+                                className="button btn-sm"
+                                onClick={() => props.onOpenBidirectionalMatch?.(item)}
+                              >
+                                {item.status === "STATEMENT_WITHOUT_LEDGER" ? "Buscar no Razão" : "Buscar no Extrato"}
                               </button>
                             )}
                             <button
@@ -2743,14 +3012,16 @@ function signProfileForLedger(
 export function proposeStatementMappings(preflight: PreflightResult): Record<string, string> {
   const mappings: Record<string, string> = {};
   for (const statement of preflight.statements.filter((item) => item.reconciliationEligible)) {
-    const registeredAccounts = new Set(
-      (preflight.registeredAccountMappings ?? [])
-        .filter((mapping) => bankAccountsMatch(mapping, statement))
-        .map((mapping) => mapping.ledgerAccount)
-        .filter((account) => preflight.ledgerAccounts.some((ledgerAccount) => ledgerAccount.account === account)),
+    const matchingRegisteredLedgers = (preflight.registeredAccountMappings ?? [])
+      .filter((mapping) => bankAccountsMatch(mapping, statement))
+      .map((mapping) => mapping.ledgerAccount);
+
+    const matchedLedgerAccounts = preflight.ledgerAccounts.filter((ledgerAccount) =>
+      matchingRegisteredLedgers.some((registered) => ledgerAccountsMatch(ledgerAccount.account, registered)),
     );
-    if (registeredAccounts.size === 1) {
-      mappings[statement.fileId] = [...registeredAccounts][0]!;
+
+    if (matchedLedgerAccounts.length === 1) {
+      mappings[statement.fileId] = matchedLedgerAccounts[0]!.account;
       continue;
     }
     const compatibleAccounts = preflight.ledgerAccounts.filter((ledgerAccount) =>
@@ -2900,7 +3171,7 @@ function fallbackHttpMessage(status: number): string {
   return "Não foi possível concluir a operação no momento. Por favor, tente novamente.";
 }
 
-function messageOf(value: unknown): string {
+export function messageOf(value: unknown): string {
   if (value instanceof TypeError)
     return "Não foi possível conectar ao servidor local. Verifique se a aplicação está em execução e tente novamente.";
   if (value instanceof Error) {

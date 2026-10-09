@@ -7,7 +7,7 @@ echo         CONCILIADOR CONTABIL E FINANCEIRO
 echo              Modo Local (Zero Docker)
 echo ========================================================
 echo.
-echo [1/3] Verificando ambiente Node.js...
+echo [1/4] Verificando ambiente Node.js...
 where node >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERRO] Node.js nao encontrado no sistema!
@@ -16,11 +16,25 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [2/3] Configurando modo local (SQLite dados.db)...
+echo [2/4] Configurando modo local (SQLite dados.db)...
 set LOCAL_MODE=true
 set PORT=3000
 
-echo [3/3] Iniciando servidor web e abrindo navegador...
+echo [3/4] Compilando modulos do nucleo (core e runtime)...
+call pnpm --filter @conciliacao/core build
+if %errorlevel% neq 0 (
+    echo [ERRO] Falha ao compilar @conciliacao/core!
+    pause
+    exit /b 1
+)
+call pnpm --filter @conciliacao/runtime build
+if %errorlevel% neq 0 (
+    echo [ERRO] Falha ao compilar @conciliacao/runtime!
+    pause
+    exit /b 1
+)
+
+echo [4/4] Iniciando servidor web e abrindo navegador...
 echo.
 echo O sistema estara acessivel em: http://localhost:3000
 echo Pressione Ctrl+C para encerrar o sistema quando terminar.

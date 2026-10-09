@@ -167,7 +167,7 @@ export function parseStatement(
     if (exactStructuralPattern(row, profile.rules.stopPatterns)) break;
     if (row.cells.every((candidate) => !candidate.displayValue.trim())) continue;
 
-    const rawDate = cell(row, "date");
+    let rawDate = cell(row, "date");
     const description = [
       ...new Set([
         cell(row, "description")?.trim(),
@@ -215,11 +215,16 @@ export function parseStatement(
 
     if (exactStructuralPattern(row, profile.rules.ignoreRowPatterns)) continue;
 
-    // Handle multiline descriptions
-    if (!rawDate && profile.rules.inheritDateFromPreviousRow && lastDate && description && !rawAmount && !rawDebit && !rawCredit) {
-      const previous = transactions.at(-1);
-      if (previous) previous.description = `${previous.description} ${description}`.trim();
-      continue;
+    // Handle date inheritance and multiline descriptions
+    if (!rawDate && profile.rules.inheritDateFromPreviousRow && lastDate) {
+      if (description && !rawAmount && !rawDebit && !rawCredit) {
+        const previous = transactions.at(-1);
+        if (previous) previous.description = `${previous.description} ${description}`.trim();
+        continue;
+      }
+      if (rawAmount || rawDebit || rawCredit) {
+        rawDate = lastDate;
+      }
     }
 
     if (!rawDate) continue;

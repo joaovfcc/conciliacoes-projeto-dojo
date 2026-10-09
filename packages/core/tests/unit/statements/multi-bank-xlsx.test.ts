@@ -85,6 +85,37 @@ describe("Multi-bank XLSX profile detection", () => {
     expect(records).toHaveLength(2);
   });
 
+  it("extrai todas as transações de múltiplos lançamentos por dia via herança de data no Bradesco XLSX", async () => {
+    const buffer = await createXlsxBuffer("Lançamentos", [
+      ["Atualização:", "31/12/2025 10:18"],
+      ["Nome:", "EMPRESA EXEMPLO"],
+      ["Agência:", "3394"],
+      ["Conta:", "0012545-8"],
+      [],
+      ["Data", "Lançamento", "Ag/origem", "Razão Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["28/11/2025", "SALDO ANTERIOR", "", "", "", "", "1.000,00"],
+      ["01/12/2025", "PAGAMENTO 1", "339401", "FORNECEDOR A", "", "-100,00", "900,00"],
+      ["", "PAGAMENTO 2 MESMO DIA", "339402", "FORNECEDOR B", "", "-50,00", "850,00"],
+      ["", "PAGAMENTO 3 MESMO DIA", "339403", "FORNECEDOR C", "", "-200,00", "650,00"],
+      ["02/12/2025", "RECEBIMENTO CLIENTE", "339404", "CLIENTE X", "", "500,00", "1.150,00"],
+      ["", "RENTAB.INVEST FACILCRED*", "", "", "", "0,15", "1.150,00"],
+    ]);
+
+    const { records, metadata, issues } = await parseTabularStatement(input("Bradesco_multiplos_por_dia", buffer), ALL_PROFILES);
+
+    expect(issues.filter((item) => item.severity === "ERROR")).toHaveLength(0);
+    expect(metadata.parser).toBe("bradesco-checking-xlsx-v1");
+    // All 5 transactions are extracted (4 operational + 1 informational)
+    expect(records).toHaveLength(5);
+    expect(records[0]!.date).toBe("2025-12-01");
+    expect(records[1]!.date).toBe("2025-12-01");
+    expect(records[2]!.date).toBe("2025-12-01");
+    expect(records[3]!.date).toBe("2025-12-02");
+    expect(records[4]!.date).toBe("2025-12-02");
+    // And balanceCheck passes without mismatch
+    expect(metadata.balanceCheck?.status).toBe("PASSED");
+  });
+
   it("should detect BB layout with débito (r$)/crédito (r$) headers", async () => {
     const buffer = await createXlsxBuffer("Banco do Brasil", [
       ["Banco do Brasil S.A."],

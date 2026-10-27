@@ -333,7 +333,7 @@ describe("configuration domain", () => {
     expect(() => JSON.stringify(event)).not.toThrow();
   });
 
-  it.each(["approve", "publish"] as const)("faz rollback de %s quando auditoria falha", async (transition) => {
+  it.each(["approve", "publish"] as const)("faz rollback de %s quando auditoria falha", async (transition: "approve" | "publish") => {
     const failingRepository = new InMemoryConfigurationRepository();
     await seedOrganization(failingRepository, "org-1");
     const failingService = new ConfigurationService(failingRepository, () => fixedNow, () => "audit-failure");

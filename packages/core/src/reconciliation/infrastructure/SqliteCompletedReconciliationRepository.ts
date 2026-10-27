@@ -10,13 +10,18 @@ import type { ConfirmProcessingRequest, ProcessingResult } from "../../types.js"
 
 export class SqliteCompletedReconciliationRepository implements CompletedReconciliationRepository {
   private readonly db: DatabaseSync;
+  private readonly maxRecords: number;
 
-  constructor(dbInput: string | DatabaseSync = "dados.db") {
+  constructor(
+    dbInput: string | DatabaseSync = "dados.db",
+    maxRecords = Number.parseInt(process.env.MAX_COMPLETED_RECONCILIATIONS ?? "50", 10) || 50,
+  ) {
     if (typeof dbInput === "string") {
       this.db = new DatabaseSync(dbInput);
     } else {
       this.db = dbInput;
     }
+    this.maxRecords = maxRecords;
     this.init();
   }
 
@@ -69,6 +74,7 @@ export class SqliteCompletedReconciliationRepository implements CompletedReconci
         processingAttemptId ?? null,
         processingGeneration ?? null,
       );
+      this.evictOldest();
       return true;
     }
 
@@ -104,11 +110,23 @@ export class SqliteCompletedReconciliationRepository implements CompletedReconci
       JSON.stringify(record.result),
       record.completedAt.toISOString(),
       record.expiresAt.toISOString(),
-      processingAttemptId ?? null,
-      processingGeneration ?? null,
+      processingAttemptId ?? existing.processing_attempt_id ?? null,
+      processingGeneration ?? existing.processing_generation ?? null,
       record.id,
     );
     return true;
+  }
+
+  private evictOldest(): void {
+    if (this.maxRecords <= 0) return;
+    this.db.prepare(`
+      DELETE FROM completed_reconciliations
+      WHERE id NOT IN (
+        SELECT id FROM completed_reconciliations
+        ORDER BY completed_at DESC, rowid DESC
+        LIMIT ?
+      )
+    `).run(this.maxRecords);
   }
 
   async list(companyIds: string[], page: number, size: number, now: Date): Promise<{

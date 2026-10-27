@@ -19,7 +19,7 @@ describe("Guanabara current-account adapters", () => {
   it.each([
     ["conta corrente", guanabaraCurrentAccountAdapter, "GUANABARA_CC"],
     ["conta vinculada", guanabaraLinkedAccountAdapter, "GUANABARA_CONTA_VINCULADA"],
-  ] as const)("accepts an explicit no-movement %s statement", async (title, adapter, layoutFamily) => {
+  ] as const)("accepts an explicit no-movement %s statement", async (title: string, adapter: any, layoutFamily: string) => {
     const document = await adapter.parse(pdfSource([statement(`Extrato de ${title}`)]))
 
     expect(document.layoutFamily).toBe(layoutFamily)

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EffectiveConfigurationResolver,
   FakeReconciliationEngineAdapter,
+  type FakeEngineScenario,
   InMemoryConfigurationRepository,
   ProfileSnapshotService,
   RealReconciliationEngineAdapter,
@@ -282,7 +283,7 @@ describe("configuration routing and orchestration", () => {
 
   it.each([
     ["timeout", "TIMED_OUT"], ["cancel", "CANCELLED"], ["failure", "FAILED"], ["pending", "PENDING"], ["blocked", "BLOCKED"],
-  ] as const)("fake %s persiste status %s", async (scenario, status) => {
+  ] as const)("fake %s persiste status %s", async (scenario: FakeEngineScenario, status: string) => {
     const repository = new InMemoryConfigurationRepository();
     await saveSnapshot(repository, "snapshot-1", reconciliationSnapshotFixture(), "version-1");
     const run = await new ReconciliationOrchestrator(

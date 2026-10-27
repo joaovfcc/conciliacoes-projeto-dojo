@@ -30,6 +30,40 @@ function physicalWorksheetRange(worksheet: XLSX.WorkSheet): XLSX.Range | undefin
   return { s: { r: 0, c: 0 }, e: { r: maximumRow, c: maximumColumn } };
 }
 
+export function resolveSpreadsheetCellValue(
+  val: unknown,
+  originalCell: XLSX.CellObject | undefined
+): unknown {
+  if (
+    originalCell &&
+    originalCell.t === "n" &&
+    typeof originalCell.v === "number" &&
+    originalCell.v >= 30000 &&
+    originalCell.v <= 75000
+  ) {
+    const formatCode = typeof originalCell.z === "string" ? originalCell.z.trim() : "";
+    const isNamedDateFormat = /^(short|long|medium|general)\s+date$/i.test(formatCode);
+    const isExcelDateFormat =
+      Boolean(formatCode) &&
+      formatCode.toLowerCase() !== "general" &&
+      XLSX.SSF.is_date(formatCode);
+
+    const isCorruptedDateString =
+      typeof val === "string" &&
+      (/^\d{2}ort\s+\d+at\d{4}$/i.test(val.trim()) || /^long\s+\d+at\d{4}$/i.test(val.trim()));
+
+    if (isNamedDateFormat || isExcelDateFormat || isCorruptedDateString) {
+      const utcDays = Math.floor(originalCell.v - 25569);
+      const dateObj = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(dateObj.getTime())) {
+        return dateObj.toISOString().slice(0, 10);
+      }
+    }
+  }
+
+  return val;
+}
+
 export function parseSpreadsheet(input: ParseSpreadsheetInput): ExtractedTabularDocument {
   const limits = { ...DEFAULT_TABULAR_LIMITS, ...input.limits };
 
@@ -48,6 +82,7 @@ export function parseSpreadsheet(input: ParseSpreadsheetInput): ExtractedTabular
       bookVBA: false, // Ensure macros are not loaded/executed
       cellFormula: true,
       cellDates: false,
+      cellNF: true,
       cellText: true,
     });
   } catch (e: any) {
@@ -151,11 +186,13 @@ export function parseSpreadsheet(input: ParseSpreadsheetInput): ExtractedTabular
         if (originalCell && originalCell.f) {
           hasFormulas = true;
         }
+
+        const resolvedVal = resolveSpreadsheetCellValue(val, originalCell);
         
         return {
           columnIndex: cIndex,
-          rawValue: val,
-          displayValue: String(val ?? ""),
+          rawValue: resolvedVal,
+          displayValue: String(resolvedVal ?? ""),
           formula: originalCell?.f
         };
       });

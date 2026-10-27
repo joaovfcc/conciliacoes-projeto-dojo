@@ -203,6 +203,37 @@ describe("integração do motor PRD no runtime", () => {
     expect(saves.indexOf("Conciliação concluída.")).toBeGreaterThan(saves.indexOf("RF-02 a RF-09 concluídas; consolidando controles e evidências."));
   });
 
+  it("permite conciliar extrato com divergência no controle de saldo registrando ressalva SALDO_EXTRATO_DIVERGENTE e status COMPLETED_WITH_ISSUES", async () => {
+    const services = await runtime();
+    const session = processableSession("runtime-balance-warning");
+    session.preflight!.statements[0]!.balanceCheck = {
+      status: "FAILED",
+      openingBalance: "100.00",
+      creditTotal: "0.00",
+      debitTotal: "-10.00",
+      movementTotal: "-10.00",
+      expectedClosingBalance: "90.00",
+      extractedClosingBalance: "200.00",
+      difference: "-110.00",
+      tolerance: "0.01",
+    };
+    await services.sessions.save(session);
+    await services.process(session, {
+      company: "EMPRESA",
+      branch: "01",
+      period: "202601",
+      valueTolerance: "0.00",
+      dateToleranceDays: 0,
+      mappings: [{ ledgerAccount: "111", statementFileIds: ["statement"], signProfile: "BANK_ASSET" }],
+      idempotencyKey: "balance-warning",
+    });
+
+    expect(session.status).toBe("COMPLETED_WITH_ISSUES");
+    expect(session.result?.issues).toContainEqual(
+      expect.objectContaining({ severity: "WARNING", code: "SALDO_EXTRATO_DIVERGENTE", fileId: "statement" }),
+    );
+  });
+
   it("não expõe conclusão quando a persistência anual falha", async () => {
     const path = await mkdtemp(join(tmpdir(), "reconciliation_failure_")); temporaryDirectories.push(path);
     const config = { ...loadRuntimeConfig({}), localStoragePath: path };
@@ -297,6 +328,29 @@ describe("integração do motor PRD no runtime", () => {
       progressMessage: "Conciliação concluída.",
     });
     expect(await services.sessions.get(stale.id)).not.toHaveProperty("errorCode");
+  });
+
+  it("permite atualizar o result de uma sessão concluída sem regredir o status e remove a sessão mais antiga ao atingir a capacidade", async () => {
+    const services = await runtime();
+    services.config.maxSessionsPerIp = 2;
+    const first = await services.sessions.create("client-fifo", "user", "org", "company");
+    const second = await services.sessions.create("client-fifo", "user", "org", "company");
+    const third = await services.sessions.create("client-fifo", "user", "org", "company");
+
+    expect(await services.sessions.get(first.session.id)).toBeNull();
+    expect(await services.sessions.get(second.session.id)).not.toBeNull();
+    expect(await services.sessions.get(third.session.id)).not.toBeNull();
+    expect(await services.sessions.countActive("client-fifo")).toBe(2);
+
+    const completed = (await services.sessions.get(third.session.id))!;
+    completed.status = "COMPLETED_WITH_ISSUES";
+    completed.result = { company: "EMPRESA", branch: "01", period: "202609", executedAt: new Date().toISOString(), summaries: [], results: [], issues: [], files: [], investments: [], controls: { tolerance: "0.05", signProfiles: [], movements: { bankConciliable: "0.00", ledger: "0.00", difference: "0.00", status: "PASSED" }, balances: { openingStatus: "NOT_AVAILABLE", closingStatus: "NOT_AVAILABLE" }, coverage: { lines: { covered: "0", total: "0", percentage: "0.00" }, absoluteValue: { covered: "0.00", total: "0.00", percentage: "0.00" } }, countsByStatus: [], pendingByDate: [] } };
+    expect(await services.sessions.complete(completed)).toBe(true);
+
+    const updated = (await services.sessions.get(third.session.id))!;
+    updated.result = { ...updated.result!, period: "202610" };
+    await services.sessions.save(updated);
+    expect((await services.sessions.get(third.session.id))?.result?.period).toBe("202610");
   });
 
   it("uma tentativa substituída não salva nem conclui sobre a tentativa atual", async () => {

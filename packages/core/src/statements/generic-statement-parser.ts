@@ -83,6 +83,18 @@ function exactStructuralPattern(row: ExtractedTabularRow, patterns: string[] | u
   return patterns?.some((pattern) => values.length === 1 && values[0] === normalizeHeader(pattern)) ?? false;
 }
 
+function rowContainsAnyPattern(row: ExtractedTabularRow, patterns: string[] | undefined): boolean {
+  if (!patterns?.length) return false;
+  return row.cells.some((cell) => {
+    const text = normalizeText(cell.displayValue);
+    if (!text) return false;
+    return patterns.some((p) => {
+      const normPattern = normalizeText(p);
+      return Boolean(normPattern && (text === normPattern || text.startsWith(normPattern)));
+    });
+  });
+}
+
 const GLOBAL_NON_TRANSACTION_PATTERNS = [
   "saldo anterior",
   "saldo atual",
@@ -91,6 +103,10 @@ const GLOBAL_NON_TRANSACTION_PATTERNS = [
   "saldo disponível",
   "saldo em investimentos",
   "saldo bloqueado",
+  "saldo em conta corrente",
+  "saldo conta corrente",
+  "sdo aplic",
+  "sdo ",
   "posicao em",
   "posição em",
   "posicao consolidada",
@@ -100,6 +116,14 @@ const GLOBAL_NON_TRANSACTION_PATTERNS = [
   "resumo",
   "subtotal",
   "total",
+  "total r$",
+  "total disponivel",
+  "total disponível",
+  "extrato mensal",
+  "conta-corrente",
+  "conta corrente",
+  "nao ha lancamentos",
+  "não há lançamentos",
 ];
 
 function isStructuralNonTransactionRow(description: string, customPatterns?: string[]): boolean {
@@ -164,7 +188,12 @@ export function parseStatement(
   let closingBalance: number | undefined;
 
   for (const row of sheet.rows.slice(headerRowIndex + 1)) {
-    if (exactStructuralPattern(row, profile.rules.stopPatterns)) break;
+    if (
+      exactStructuralPattern(row, profile.rules.stopPatterns) ||
+      rowContainsAnyPattern(row, profile.rules.stopPatterns)
+    ) {
+      break;
+    }
     if (row.cells.every((candidate) => !candidate.displayValue.trim())) continue;
 
     let rawDate = cell(row, "date");
@@ -190,24 +219,37 @@ export function parseStatement(
     ) ?? false;
 
     // Check if this row is a structural balance/summary row
-    if (isOpeningBalance || isClosingBalance || isStructuralNonTransactionRow(description, profile.rules.ignoreRowPatterns)) {
-      const balanceToParse = rawBalance?.trim() || rawAmount?.trim();
-      if (balanceToParse) {
-        try {
-          const balance = parseFlexibleMoney(balanceToParse).toNumber();
-          if ((isOpeningBalance || normalizeText(description).includes("saldo anterior")) && openingBalance === undefined) {
-            openingBalance = balance;
+    if (
+      isOpeningBalance ||
+      isClosingBalance ||
+      isStructuralNonTransactionRow(description, profile.rules.ignoreRowPatterns) ||
+      rowContainsAnyPattern(row, profile.rules.ignoreRowPatterns)
+    ) {
+      const normDesc = normalizeText(description);
+      const setsOpeningBalance =
+        (isOpeningBalance || normDesc.includes("saldo anterior")) && openingBalance === undefined;
+      const setsClosingBalance =
+        isClosingBalance || normDesc.includes("saldo final") || normDesc.includes("saldo atual");
+
+      if (setsOpeningBalance || setsClosingBalance) {
+        const balanceToParse = rawBalance?.trim() || rawAmount?.trim();
+        if (balanceToParse) {
+          try {
+            const balance = parseFlexibleMoney(balanceToParse).toNumber();
+            if (setsOpeningBalance) {
+              openingBalance = balance;
+            }
+            if (setsClosingBalance) {
+              closingBalance = balance;
+            }
+          } catch {
+            warnings.push({
+              code: "INVALID_BALANCE",
+              message: "Saldo estrutural não pôde ser interpretado.",
+              sheetName: sheet.name,
+              rowNumber: row.rowNumber,
+            });
           }
-          if (isClosingBalance || normalizeText(description).includes("saldo final") || normalizeText(description).includes("saldo atual")) {
-            closingBalance = balance;
-          }
-        } catch {
-          warnings.push({
-            code: "INVALID_BALANCE",
-            message: "Saldo estrutural não pôde ser interpretado.",
-            sheetName: sheet.name,
-            rowNumber: row.rowNumber,
-          });
         }
       }
       continue;

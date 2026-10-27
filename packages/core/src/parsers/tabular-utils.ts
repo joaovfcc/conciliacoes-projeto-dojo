@@ -28,6 +28,24 @@ export function extensionOf(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
 }
 
+export function unwrapExcelJsCellValue(value: unknown): unknown {
+  if (value === null || value === undefined || value instanceof Date || typeof value !== "object") {
+    return value;
+  }
+  if ("richText" in value && Array.isArray((value as { richText?: unknown[] }).richText)) {
+    return (value as { richText: unknown[] }).richText
+      .map((part) => String((part as { text?: unknown })?.text ?? ""))
+      .join("");
+  }
+  if ("text" in value && typeof (value as { text?: unknown }).text === "string") {
+    return (value as { text: string }).text;
+  }
+  if ("result" in value && (value as { result?: unknown }).result !== undefined) {
+    return (value as { result: unknown }).result;
+  }
+  return value;
+}
+
 export async function tabularRows(
   file: SourceFileInput,
 ): Promise<{ rows: Array<{ position: number; values: Record<string, unknown> }>; metadata: LedgerFileMetadata }> {
@@ -49,7 +67,10 @@ export async function tabularRows(
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(file.buffer as unknown as ExcelJS.Buffer);
       workbook.eachSheet((sheet) => {
-        const rows = sheet.getSheetValues().slice(1).map((row) => (Array.isArray(row) ? row.slice(1) : []));
+        const rows = sheet
+          .getSheetValues()
+          .slice(1)
+          .map((row) => (Array.isArray(row) ? row.slice(1).map(unwrapExcelJsCellValue) : []));
         for (const [index, row] of rows.slice(0, 100).entries()) {
           const score = row.map(normalizeHeader).filter((header) => aliasLookup.has(header)).length;
           if (score > best.score) best = { score, rows, header: index };
@@ -152,7 +173,11 @@ export async function tabularRows(
 
     // Sticky date propagation
     const rawDateVal = values.DATE;
-    if (rawDateVal instanceof Date || (typeof rawDateVal === "string" && rawDateVal.trim())) {
+    if (
+      rawDateVal instanceof Date ||
+      (typeof rawDateVal === "number" && Number.isFinite(rawDateVal)) ||
+      (typeof rawDateVal === "string" && rawDateVal.trim())
+    ) {
       currentStickyDate = rawDateVal;
     } else if (!rawDateVal && currentStickyDate && (values.DEBIT || values.CREDIT || values.VALUE)) {
       values.DATE = currentStickyDate;

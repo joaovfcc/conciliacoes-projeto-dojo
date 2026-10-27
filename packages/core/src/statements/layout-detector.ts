@@ -68,7 +68,12 @@ function detectProfile(sheet: ExtractedTabularSheet, profile: StatementLayoutPro
     const bankSpecificBonus = profile.bankCode ? 15 : 0;
     const distinctiveHeaderBonus = distinctiveHeaders.length * 25;
     const score = matchedHeaders.length * 20 + exact * 5 + sheetBonus + bankSpecificBonus + distinctiveHeaderBonus + content.score;
-    const requiresReview = content.warnings.length > 0 || score < profile.detection.minimumScore;
+    const hasOnlyNoContentWarning = content.warnings.length === 1 && content.warnings[0] === "NO_CONTENT_SAMPLE";
+    const structuralScore = score - content.score;
+    const requiresReview =
+      (content.warnings.length > 0 && !hasOnlyNoContentWarning) ||
+      (hasOnlyNoContentWarning && structuralScore < Math.max(profile.detection.minimumScore, 70)) ||
+      score < profile.detection.minimumScore;
     const candidate: LayoutMatch = {
       profileId: profile.id, score, confidence: score >= 100 && !requiresReview ? "HIGH" : score >= 70 ? "MEDIUM" : "LOW",
       matchedHeaders, missingRequiredGroups: [], headerRowIndex: index, warnings: content.warnings, requiresReview,

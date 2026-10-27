@@ -1,0 +1,205 @@
+================================================================================
+          CONCILIADOR BANCARIO E CONTABIL - GUIA DE INSTALACAO E EXECUCAO
+================================================================================
+
+Este guia contem o passo a passo completo para preparar seu computador e rodar
+a aplicacao localmente em Modo Local (Zero Docker), utilizando SQLite nativo e
+armazenamento local.
+
+--------------------------------------------------------------------------------
+1. O QUE E PRECISO NO COMPUTADOR (PRE-REQUISITOS)
+--------------------------------------------------------------------------------
+
+1.1. OBRIGATORIOS:
+  - Windows 10 ou 11 (64-bit)
+  - Node.js v22.x ou v24.x LTS (obrigatorio v22+ devido ao modulo nativo node:sqlite)
+  - pnpm (gerenciador de pacotes do monorepo, v9, v10 ou v11)
+  - Git (para clonar/atualizar o repositorio)
+
+1.2. OPCIONAIS (apenas para casos especificos):
+  - Tesseract OCR + Poppler: Necessario SOMENTE se for processar extratos em PDF
+    que sejam fotos/imagens escaneadas (sem texto digital selecionavel). Para PDFs
+    normais de internet banking, o sistema extrai o texto diretamente sem OCR.
+  - Docker Desktop: Necessario SOMENTE se voce quiser rodar o modo avancado com
+    PostgreSQL e Redis. Para o modo padrao local, NAO e necessario Docker.
+
+
+--------------------------------------------------------------------------------
+2. TUTORIAL: COMO INSTALAR O NODE.JS E PNPM VIA TERMINAL NO WINDOWS
+--------------------------------------------------------------------------------
+
+Abra o terminal (PowerShell ou Windows Terminal) como Administrador ou Usuario comum.
+
+METODO 1: VIA WINGET (Recomendado - ja vem instalado no Windows 10 e 11)
+------------------------------------------------------------------------
+O 'winget' e o gerenciador oficial de pacotes da Microsoft integrado ao Windows.
+
+Passo 2.1. Instalar o Node.js LTS:
+Execute no PowerShell:
+  winget install OpenJS.NodeJS.LTS
+
+(Se preferir a versao 24 especifica, pode executar: winget install OpenJS.NodeJS -v 24.19.0)
+
+Passo 2.2. Feche o terminal e abra uma nova janela do PowerShell para atualizar o PATH.
+
+Passo 2.3. Verifique se o Node.js e o npm foram instalados corretamente:
+  node -v
+  npm -v
+(Devera exibir a versao do Node, ex: v22.x.x ou v24.x.x)
+
+Passo 2.4. Instalar o gerenciador 'pnpm' via terminal:
+  npm install -g pnpm
+
+Passo 2.5. Teste o pnpm:
+  pnpm -v
+
+
+METODO 2: VIA FNM (Fast Node Manager - Para quem gerencia varias versoes do Node)
+--------------------------------------------------------------------------------
+Se voce ja usa ou prefere o FNM:
+  winget install Schniz.fnm
+  fnm install 24
+  fnm use 24
+  fnm default 24
+  npm install -g pnpm
+
+
+METODO 3: VIA CHOCOLATEY (Se voce ja possui o Chocolatey instalado)
+------------------------------------------------------------------
+  choco install nodejs-lts -y
+  npm install -g pnpm
+
+
+--------------------------------------------------------------------------------
+3. AJUSTE DE PERMISSAO DO POWERSHELL (CASO DE ERRO DE SCRIPT)
+--------------------------------------------------------------------------------
+
+No Windows, por padrao o PowerShell pode bloquear a execucao de scripts como 'pnpm.ps1'.
+Se aparecer a mensagem "o arquivo pnpm.ps1 nao pode ser carregado porque a execucao
+de scripts foi desabilitada neste sistema", execute o seguinte comando:
+
+  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+
+
+--------------------------------------------------------------------------------
+4. INSTALACAO E CONFIGURACAO AUTOMATICA (SEM DIGITAR NADA)
+--------------------------------------------------------------------------------
+
+METODO RAPIDO (1-CLIQUE NO WINDOWS):
+Basta dar DUPLO CLIQUE no arquivo "instalar.bat" na raiz do projeto.
+Ele faz tudo automaticamente:
+  1. Detecta e instala o Node.js v22+ LTS via winget se ainda nao estiver instalado;
+  2. Instala o pnpm globalmente se necessario;
+  3. Cria os arquivos de configuracao .env e apps/web/.env.local;
+  4. Executa 'pnpm install' para baixar todos os pacotes;
+  5. Compila os modulos centrais (core e runtime).
+
+METODO MANUAL (SE PREFERIR VIA POWERSHELL):
+Passo 4.1. Abrir a pasta do projeto no PowerShell:
+  cd "C:\Users\joao.carvalho\Desktop\projeto.dojo"
+
+Passo 4.2. Instalar as dependencias de todos os modulos:
+  pnpm install
+
+Este comando instala os pacotes de apps/web, apps/worker, packages/core e
+packages/runtime, alem de gerar os tipos do Prisma automaticamente.
+
+Passo 4.3. Criar o arquivo de variaveis de ambiente (.env):
+Se ainda nao existir o arquivo .env na raiz:
+  Copy-Item .env.example .env
+
+Passo 4.4. Criar o arquivo de ambiente local do Web (apps/web/.env.local):
+Crie ou confirme o arquivo "apps/web/.env.local" com o conteudo:
+  LOCAL_MODE=true
+  APP_ORIGIN=http://localhost:3000
+  ANTIVIRUS_REQUIRED=false
+  MAX_SESSIONS_PER_HOUR=1000
+
+Passo 4.5. Compilar os modulos centrais (core e runtime):
+Como o projeto e um monorepo TypeScript, compile os pacotes base antes de rodar o web:
+  pnpm --filter @conciliacao/core build
+  pnpm --filter @conciliacao/runtime build
+
+
+--------------------------------------------------------------------------------
+5. COMO INICIAR A APLICACAO NO DIA A DIA
+--------------------------------------------------------------------------------
+
+OPCAO 1: 1-CLIQUE PELO ATALHO (Mais facil no Windows)
+----------------------------------------------------
+Basta dar DUPLO CLIQUE no arquivo "iniciar.bat" localizado na raiz do projeto.
+O script:
+  1. Valida se o Node.js esta instalado;
+  2. Ativa o LOCAL_MODE=true (SQLite dados.db);
+  3. Compila automaticamente o core e o runtime;
+  4. Inicia o servidor Next.js e abre o navegador automaticamente em:
+     http://localhost:3000
+
+
+OPCAO 2: VIA LINHA DE COMANDO (PowerShell)
+-----------------------------------------
+Na pasta raiz do projeto, execute:
+  pnpm dev:local
+
+Ou manualmente:
+  $env:LOCAL_MODE="true"
+  pnpm --filter @conciliacao/web dev
+
+Em seguida acesse no seu navegador:
+  http://localhost:3000
+
+
+--------------------------------------------------------------------------------
+6. COMO USAR O SISTEMA
+--------------------------------------------------------------------------------
+
+1. Acesse http://localhost:3000
+2. Selecione o Razao contabil Protheus (arquivo CSV ou XLSX).
+3. Selecione de 1 a 5 extratos bancarios (CSV, XLSX, OFX ou PDF de bancos como
+   Itau, Bradesco, Santander, BRB, Sofisa, etc.).
+4. Ajuste a tolerancia de valores/dias se necessario.
+5. Confira o resumo na pre-analise (empresa, filial, contas identificadas).
+6. Clique em processar para executar a conciliacao automatica e manual.
+7. Visualize os resultados, analise as divergencias e baixe o relatorio em XLSX.
+8. Os dados ficam salvos no banco local SQLite "dados.db" na raiz do projeto.
+
+
+--------------------------------------------------------------------------------
+7. CONFIGURACAO OPCIONAL: OCR PARA EXTRATOS PDF ESCANEADOS
+--------------------------------------------------------------------------------
+
+Se voce for enviar arquivos PDF que sao fotos ou digitalizacoes escaneadas (sem texto),
+o sistema precisa do Tesseract e Poppler. No arquivo "apps/web/.env.local", configure
+os caminhos absolutos dos executaveis:
+
+  PDF_OCR_COMMAND=C:\Program Files\Tesseract-OCR\tesseract.exe
+  PDF_RENDER_COMMAND=C:\Users\joao.carvalho\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\poppler\Library\bin\pdftoppm.exe
+  PDF_OCR_LANGUAGE=por
+  TESSDATA_PREFIX=C:\Users\joao.carvalho\AppData\Local\concilicao-bancaria\tessdata
+
+Se os seus extratos forem baixados do Internet Banking (PDFs comuns com texto),
+nao e necessario configurar nada disso: o sistema le o texto nativamente.
+
+
+--------------------------------------------------------------------------------
+8. RESOLUCAO DE PROBLEMAS FREQUENTES
+--------------------------------------------------------------------------------
+
+- "Porta 3000 ja esta em uso":
+  Altere a porta antes de iniciar:
+    $env:PORT="3001"
+    pnpm dev:local
+  E acesse http://localhost:3001
+
+- "Cannot find module @conciliacao/core ou @conciliacao/runtime":
+  Compile os modulos com:
+    pnpm --filter @conciliacao/core build
+    pnpm --filter @conciliacao/runtime build
+
+- "pnpm nao e reconhecido":
+  Instale o pnpm globalmente:
+    npm install -g pnpm
+
+- Para encerrar o servidor:
+  No terminal em que a aplicacao esta rodando, pressione Ctrl + C e confirme com 'S'.
+================================================================================

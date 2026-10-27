@@ -75,6 +75,7 @@ export function statementMetadata(
   parser: string,
   confidences: string[] = [],
   controls: { openingBalance?: string; closingBalance?: string; balanceMovements?: StatementRecord[] } = {},
+  overrides: { bank?: string | undefined; agency?: string | undefined; account?: string | undefined; reconciliationEligible?: boolean | undefined } = {},
 ): DetectedStatement {
   const first = records[0];
   const confidence = confidences.length ? money(confidences.reduce((sum, item) => sum + Number(item), 0) / confidences.length) : undefined;
@@ -93,9 +94,13 @@ export function statementMetadata(
   const closingBalance = controls.closingBalance ?? balanceCheck.extractedClosingBalance;
   const finalBalance = closingBalance;
   return {
-    fileId: file.id, originalName: file.originalName, bank: first?.bank ?? "", agency: first?.agency ?? "",
-    account: first?.bankAccount ?? "", periods: unique(records.map((item) => periodOf(item.date))),
-    recordCount: records.length, extractionMethod, parser, classification: "CURRENT_ACCOUNT", reconciliationEligible: true,
+    fileId: file.id, originalName: file.originalName,
+    bank: overrides.bank ?? first?.bank ?? "",
+    agency: overrides.agency ?? first?.agency ?? "",
+    account: overrides.account ?? first?.bankAccount ?? "",
+    periods: unique(records.map((item) => periodOf(item.date))),
+    recordCount: records.length, extractionMethod, parser, classification: "CURRENT_ACCOUNT",
+    reconciliationEligible: overrides.reconciliationEligible ?? (records.length > 0),
     ...(openingBalance !== undefined ? { openingBalance } : {}),
     ...(closingBalance !== undefined ? { closingBalance } : {}),
     ...(finalBalance !== undefined ? { finalBalance } : {}), balanceCheck, ...(confidence ? { confidence } : {}),

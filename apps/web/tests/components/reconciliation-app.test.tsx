@@ -22,6 +22,55 @@ describe("ReconciliationApp", () => {
     ]);
   });
 
+  it("permite ignorar um extrato elegível via __IGNORE__ e aceita extrato sem movimentos como informativo", () => {
+    const detected = preflight();
+    // Adiciona um extrato elegível e um extrato sem movimentos (reconciliationEligible: false)
+    detected.statements.push(
+      {
+        fileId: "stmt-2",
+        originalName: "bradesco-mov.xlsx",
+        bank: "BRADESCO",
+        agency: "1234",
+        account: "56789-0",
+        periods: ["202601"],
+        recordCount: 5,
+        extractionMethod: "TABULAR",
+        parser: "bradesco-checking-xlsx-v1",
+        classification: "CURRENT_ACCOUNT",
+        reconciliationEligible: true,
+      },
+      {
+        fileId: "stmt-empty",
+        originalName: "bradesco-vazio.xlsx",
+        bank: "BRADESCO",
+        agency: "1234",
+        account: "99999-0",
+        periods: [],
+        recordCount: 0,
+        extractionMethod: "TABULAR",
+        parser: "bradesco-checking-xlsx-v1",
+        classification: "CURRENT_ACCOUNT",
+        reconciliationEligible: false,
+      },
+    );
+
+    // Mapeamento: primeiro extrato mapeado para "111", segundo ignorado ("__IGNORE__")
+    const mappings = {
+      statement: "111",
+      "stmt-2": "__IGNORE__",
+    };
+
+    // O extrato sem movimentos não é elegível, então não impede confirmedIdentityMappings nem confirmedMappings
+    expect(confirmedIdentityMappings(detected, mappings)).toBe(true);
+
+    const activeMappings = confirmedMappings(detected, mappings);
+    expect(activeMappings).toHaveLength(1);
+    expect(activeMappings[0]?.statementFileIds).toEqual(["statement"]);
+    // Garante que o ignorado e o sem movimentos não entraram nos mappings da engine
+    expect(activeMappings[0]?.statementFileIds).not.toContain("stmt-2");
+    expect(activeMappings[0]?.statementFileIds).not.toContain("stmt-empty");
+  });
+
   it("apresenta o painel operacional de conciliação e métricas", () => {
     renderApp();
     expect(screen.getByText("Retenção")).toBeInTheDocument();

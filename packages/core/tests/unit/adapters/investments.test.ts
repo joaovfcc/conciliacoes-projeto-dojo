@@ -65,7 +65,7 @@ describe("Investment V2 adapters", () => {
     it.each([
       ["BMG", "BANCO BMG\nPOSICAO DE INVESTIMENTOS"],
       ["Safra", "BANCO SAFRA\nFUNDO (POSICAO DE INVESTIMENTOS EM 31/12/2025)"],
-    ])("does not classify a generic %s investment position as Sofisa", (_bank, text) => {
+    ])("does not classify a generic %s investment position as Sofisa", (_bank: string, text: string) => {
       expect(v2AdapterRegistry.select(pdfSource([text])).status).toBe("UNSUPPORTED")
     })
 

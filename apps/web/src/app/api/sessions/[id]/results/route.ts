@@ -37,7 +37,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       return Response.json({ error: { message: "Resultado não fornecido para atualização." } }, { status: 400 });
     }
     session.result = body.result;
-    await runtime().sessions.save(session);
+    const services = runtime();
+    await services.sessions.save(session);
+    const existingRecord = await services.completedReconciliations.findById(session.id, [session.companyId], new Date());
+    if (existingRecord) {
+      existingRecord.result = body.result;
+      await services.completedReconciliations.save(existingRecord);
+    }
     return Response.json({ success: true, result: session.result }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return jsonError(error);

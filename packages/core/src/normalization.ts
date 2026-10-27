@@ -218,6 +218,18 @@ export function isDocumentIdentifier(value: string | undefined): boolean {
 }
 
 /**
+ * Checks whether a given string is a formatted or unformatted Brazilian tax identifier (CPF or CNPJ).
+ */
+export function isTaxIdentifier(value: string | undefined): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (/^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(trimmed)) return true;
+  if (/^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(trimmed)) return true;
+  if (/^\d{11}$/.test(trimmed) || /^\d{14}$/.test(trimmed)) return true;
+  return false;
+}
+
+/**
  * Universal document number extraction from accounting or banking descriptions.
  * Handles Brazilian banking standards (Febraban) and ERP formats (Protheus, SAP, etc.).
  */
@@ -225,41 +237,59 @@ export function extractDocumentNumber(text: string | undefined): string | undefi
   if (!text) return undefined;
   const raw = String(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 
+  // Strip bank.agency patterns typical of Itaú TED/DOC descriptions:
+  // e.g. "TED - 755.1306.SOUZA...", "TED - RECEBIDA 033.4263.BANQI...", "TED - RECEBIDA 237.0231.ATU...", "TED - 104.4280.SPREAD..."
+  // Strip Protheus bank transfer account triples in TRANSF. BANC. / TAR. BANC.:
+  // e.g. "TRANSF. BANC. - 341 8363  00378" (341 bank, 8363 agency, 00378 account)
+  // Strip formatted CNPJ/CPF or dotted 8-digit CNPJ roots:
+  // e.g. "66.033.211", "65.929.113", "28.944.801/0001-24", "094.048.457-95"
+  const cleaned = raw
+    .replace(/\b(?:TRANSF\.?\s*BANC\.?|TAR\.?\s*BANC\.?)\s*[-–:#/]?\s*\d{3}\s+\d{3,5}\s+\d{3,10}\b/gi, " ")
+    .replace(/\b\d{2,3}\.\d{3}\.\d{3}(?:\/\d{4}-\d{2}|-\d{2})?\b/g, " ")
+    .replace(/\b\d{3}\.\d{3,5}\.(?=[A-Z0-9])/g, " ")
+    .replace(/\b\d{3}\.\d{3,5}\b/g, " ");
+
+  const isSupplierPaymentHeader = /PAGAMENTOS\s+A\s+FORNECEDORES/i.test(raw);
+
   // 1. Explicit Title/Document prefixes (accounting & banking)
   // e.g. "BAIXA TIT. - 000064833", "BXA. JUROS - 000064833", "TIT. 64833", "TITULO 64833"
-  const titleMatch = /\b(?:BAIXA\s+TIT(?:ULO)?\.?|BXA\.?\s*(?:TIT(?:ULO)?\.?|JUROS|DESC|MULTA|ACRESC)?|TIT\.?|TITULO|TITULOS)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.exec(raw);
+  const titleMatch = /\b(?:BAIXA\s+TIT(?:ULO)?\.?|BXA\.?\s*(?:TIT(?:ULO)?\.?|JUROS|DESC|MULTA|ACRESC)?|TIT\.?|TITULO|TITULOS)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.exec(cleaned);
   if (titleMatch && titleMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(titleMatch[1])) {
     return titleMatch[1];
   }
 
   // 2. Invoice / Tax / Commercial Document prefixes
   // e.g. "NF 12345", "NF-E 00012345", "FATURA 64833", "DUPLICATA 64833", "BOLETO 64833", "CHQ 123456"
-  const docMatch = /\b(?:NF[-–\s]*E?|NOTA\s+FISCAL|FATURA|FAT|DUP|DUPLICATA|CHQ|CHEQUE|BOL|BOLETO|BORDERO|BORD|DOC(?:TO)?|DOCUMENTO)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.exec(raw);
+  const docMatch = /\b(?:NF[-–\s]*E?|NOTA\s+FISCAL|FATURA|FAT|DUP|DUPLICATA|CHQ|CHEQUE|BOL|BOLETO|BORDERO|BORD|DOC(?:TO)?|DOCUMENTO)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.exec(cleaned);
   if (docMatch && docMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(docMatch[1])) {
     return docMatch[1];
   }
 
   // 3. Payment / Liquidation / Electronic Banking prefixes across ALL Brazilian banks
   // e.g. "PGTO ITAU 64833", "PAGTO ELETRONICO 64833", "LIQ.TIT.OUTRO BCO 64833", "SISPAG 64833", "PAGFOR 64833", "DEB T COB 64833"
-  const paymentMatch = /\b(?:PGTO|PAGTO|PAGAMENTO|LIQ\.?\s*TIT\.?|LIQUIDACAO|DEB\.?\s*T\.?\s*COB|SISPAG|PAGFOR)\b.*?\b0*([1-9]\d{3,12})\b/i.exec(raw);
-  if (paymentMatch && paymentMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(paymentMatch[1])) {
-    return paymentMatch[1];
+  if (!isSupplierPaymentHeader) {
+    const paymentMatch = /\b(?:PGTO|PAGTO|PAGAMENTO|LIQ\.?\s*TIT\.?|LIQUIDACAO|DEB\.?\s*T\.?\s*COB|SISPAG|PAGFOR)\b.*?\b0*([1-9]\d{3,12})\b/i.exec(cleaned);
+    if (paymentMatch && paymentMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(paymentMatch[1])) {
+      return paymentMatch[1];
+    }
   }
 
   // 4. Electronic Transfer prefixes (TED, PIX, DOC)
-  const transferMatch = /\b(?:TED|PIX|TRANSF)\b.*?\b0*([1-9]\d{3,12})\b/i.exec(raw);
+  const transferMatch = /\b(?:TED|PIX|TRANSF)\b.*?\b0*([1-9]\d{3,12})\b/i.exec(cleaned);
   if (transferMatch && transferMatch[1] && !NON_DOCUMENT_NUMERIC_CODES.has(transferMatch[1])) {
     return transferMatch[1];
   }
 
-  // 5. Fallback: Search for an isolated numeric token (4 to 10 digits) that is not a date, CNPJ, or bank code
-  const tokens = raw.split(/[^A-Z0-9]+/).filter((t) => /^\d{4,10}$/.test(t));
-  const candidateTokens = tokens
-    .map((t) => t.replace(/^0+(?=\d)/, ""))
-    .filter((t) => !NON_DOCUMENT_NUMERIC_CODES.has(t) && !isDateLikeNumber(t));
+  // 5. Fallback: Search for an isolated numeric token (3 to 10 significant digits) that is not a date, CNPJ, or bank code
+  if (!isSupplierPaymentHeader) {
+    const tokens = cleaned.split(/[^A-Z0-9]+/).filter((t) => /^\d{3,12}$/.test(t));
+    const candidateTokens = tokens
+      .map((t) => t.replace(/^0+(?=\d)/, ""))
+      .filter((t) => t.length >= 3 && t.length <= 10 && !NON_DOCUMENT_NUMERIC_CODES.has(t) && !isDateLikeNumber(t));
 
-  if (candidateTokens.length === 1) {
-    return candidateTokens[0];
+    if (candidateTokens.length === 1) {
+      return candidateTokens[0];
+    }
   }
 
   return undefined;
@@ -281,6 +311,17 @@ export function resolveTransactionDocument(
   const rawDoc = (document ?? "").trim();
   const normDoc = normalizeDocumentId(rawDoc);
 
+  // If rawDoc is a tax identifier (CPF / CNPJ), do not overwrite with bogus history
+  if (isTaxIdentifier(rawDoc)) {
+    if (history) {
+      const extracted = extractDocumentNumber(history);
+      if (extracted && !isTaxIdentifier(extracted)) {
+        return normalizeDocumentId(extracted);
+      }
+    }
+    return normDoc;
+  }
+
   // If rawDoc is valid and not a generic code or small number, use it
   if (normDoc && !NON_DOCUMENT_NUMERIC_CODES.has(normDoc) && isDocumentIdentifier(normDoc)) {
     return normDoc;
@@ -289,7 +330,9 @@ export function resolveTransactionDocument(
   // Otherwise, extract from description/history
   if (history) {
     const extracted = extractDocumentNumber(history);
-    if (extracted) return normalizeDocumentId(extracted);
+    if (extracted && !isTaxIdentifier(extracted)) {
+      return normalizeDocumentId(extracted);
+    }
   }
 
   return normDoc && !NON_DOCUMENT_NUMERIC_CODES.has(normDoc) ? normDoc : undefined;

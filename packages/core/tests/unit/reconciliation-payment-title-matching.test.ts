@@ -261,4 +261,335 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       expect(diag.candidateComparison.finalDecision).toBe("MATCHED");
     });
   });
+
+  describe("6. Two-Pointers Counterparty Sweep, Truncated Protheus Names & Cascade Elimination", () => {
+    const confirmation: ConfirmProcessingRequest = {
+      company: "EMPRESA",
+      branch: "01",
+      period: "202609",
+      valueTolerance: "0.01",
+      dateToleranceDays: 2,
+      mappings: [
+        {
+          ledgerAccount: "11102012",
+          statementFileIds: ["stmt-file-1"],
+          signProfile: "BANK_LIABILITY",
+        },
+      ],
+      idempotencyKey: "test-wave4-key",
+    };
+
+    it("1. reconciles truncated Protheus names with neighbor-row noise on the same date via cascade", () => {
+      const s1: StatementRecord = {
+        id: "s-bianche",
+        sourceId: "s-bianche",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-21",
+        document: "",
+        history: "PAGAMENTOS A FORNECEDORES - BIANCHE INFORMATICA LTDA QUANTUM TECH",
+        value: "-5000.00",
+        evidence: { fileId: "stmt-file-1", line: 10, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const s2: StatementRecord = {
+        id: "s-noah-leak",
+        sourceId: "s-noah-leak",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-21",
+        document: "",
+        history: "PAGAMENTOS A FORNECEDORES - LTDA",
+        value: "-5000.00",
+        evidence: { fileId: "stmt-file-1", line: 11, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l1: LedgerRecord = {
+        id: "l-bianche",
+        sourceId: "l-bianche",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-21",
+        document: "",
+        history: "BAIXA TIT. - 000000001 - BIANCHE INFORMA",
+        value: "-5000.00",
+        evidence: { fileId: "ldg-file-1", line: 20, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l2: LedgerRecord = {
+        id: "l-noah",
+        sourceId: "l-noah",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-21",
+        document: "",
+        history: "BAIXA TIT. - 000000002 - NOAH TCHALLA IN",
+        value: "-5000.00",
+        evidence: { fileId: "ldg-file-1", line: 21, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+
+      const result = reconcile([l1, l2], [s1, s2], confirmation);
+      const matches = result.results.filter((r) => r.status === "AUTO_MATCH_EXACT");
+      expect(matches).toHaveLength(2);
+
+      const mBianche = matches.find((m) => m.ledger?.id === "l-bianche");
+      expect(mBianche?.statement?.id).toBe("s-bianche");
+
+      const mNoah = matches.find((m) => m.ledger?.id === "l-noah");
+      expect(mNoah?.statement?.id).toBe("s-noah-leak");
+    });
+
+    it("2. disambiguates concatenated primary vs secondary supplier names on same date", () => {
+      const s1: StatementRecord = {
+        id: "s-kaeru-concat",
+        sourceId: "s-kaeru-concat",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-21",
+        document: "",
+        history: "PAGAMENTOS A FORNECEDORES - KAERU TECNOLOGIA LTDA PAGAMENTOS A FORNECEDORES DLDD PRESTACAO",
+        value: "-12000.24",
+        evidence: { fileId: "stmt-file-1", line: 10, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const s2: StatementRecord = {
+        id: "s-dldd-pure",
+        sourceId: "s-dldd-pure",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-21",
+        document: "",
+        history: "DLDD PRESTACAO DE SERVICOS",
+        value: "-12000.24",
+        evidence: { fileId: "stmt-file-1", line: 11, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l1: LedgerRecord = {
+        id: "l-kaeru",
+        sourceId: "l-kaeru",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-21",
+        document: "",
+        history: "BAIXA TIT. - 000000004 - KAERU TECNOLOGI",
+        value: "-12000.24",
+        evidence: { fileId: "ldg-file-1", line: 20, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l2: LedgerRecord = {
+        id: "l-dldd",
+        sourceId: "l-dldd",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-21",
+        document: "",
+        history: "BAIXA TIT. - 000000005 - DLDD PRESTACAO",
+        value: "-12000.24",
+        evidence: { fileId: "ldg-file-1", line: 21, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+
+      const result = reconcile([l1, l2], [s1, s2], confirmation);
+      const matches = result.results.filter((r) => r.status === "AUTO_MATCH_EXACT");
+      expect(matches).toHaveLength(2);
+
+      const mKaeru = matches.find((m) => m.ledger?.id === "l-kaeru");
+      expect(mKaeru?.statement?.id).toBe("s-kaeru-concat");
+
+      const mDldd = matches.find((m) => m.ledger?.id === "l-dldd");
+      expect(mDldd?.statement?.id).toBe("s-dldd-pure");
+    });
+
+    it("3. handles TEDs with bank.agency. prefixes and CNPJs in document column", () => {
+      const s1: StatementRecord = {
+        id: "s-souza",
+        sourceId: "s-souza",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-10",
+        document: "33.009.911/0001-39",
+        history: "TED - 755.1306.SOUZA C L SOUZA CRUZ LTDA",
+        value: "-8000.00",
+        evidence: { fileId: "stmt-file-1", line: 10, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l1: LedgerRecord = {
+        id: "l-souza",
+        sourceId: "l-souza",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-10",
+        document: "",
+        history: "BAIXA TIT. - 000000287 - SOUZA CRUZ LT",
+        value: "-8000.00",
+        evidence: { fileId: "ldg-file-1", line: 20, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+
+      const s2: StatementRecord = {
+        id: "s-spread",
+        sourceId: "s-spread",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-12",
+        document: "",
+        history: "TED - 104.4280.SPREAD S E LTDA",
+        value: "-15000.00",
+        evidence: { fileId: "stmt-file-1", line: 11, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l2: LedgerRecord = {
+        id: "l-spread",
+        sourceId: "l-spread",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-12",
+        document: "",
+        history: "TRANSF. BANC. - 341 8363 00378",
+        value: "-15000.00",
+        evidence: { fileId: "ldg-file-1", line: 21, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+
+      const result = reconcile([l1, l2], [s1, s2], confirmation);
+      const matches = result.results.filter((r) => r.status === "AUTO_MATCH_EXACT");
+      expect(matches).toHaveLength(2);
+
+      const mSouza = matches.find((m) => m.ledger?.id === "l-souza");
+      expect(mSouza?.statement?.id).toBe("s-souza");
+
+      const mSpread = matches.find((m) => m.ledger?.id === "l-spread");
+      expect(mSpread?.statement?.id).toBe("s-spread");
+    });
+
+    it("4. reconciles duplicate entries of the same supplier on the same date via two-pointers sweep", () => {
+      const s1: StatementRecord = {
+        id: "s-claro-1",
+        sourceId: "s-claro-1",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-28",
+        document: "",
+        history: "PAGAMENTOS A FORNECEDORES - CLARO S.A.",
+        value: "-150.00",
+        evidence: { fileId: "stmt-file-1", line: 10, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const s2: StatementRecord = {
+        id: "s-claro-2",
+        sourceId: "s-claro-2",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-28",
+        document: "",
+        history: "PAGAMENTOS A FORNECEDORES - CLARO S.A.",
+        value: "-150.00",
+        evidence: { fileId: "stmt-file-1", line: 11, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l1: LedgerRecord = {
+        id: "l-claro-1",
+        sourceId: "l-claro-1",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-28",
+        document: "",
+        history: "BAIXA TIT. - 000001001 - CLARO S.A.",
+        value: "-150.00",
+        evidence: { fileId: "ldg-file-1", line: 20, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+      const l2: LedgerRecord = {
+        id: "l-claro-2",
+        sourceId: "l-claro-2",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-28",
+        document: "",
+        history: "BAIXA TIT. - 000001002 - CLARO S.A.",
+        value: "-150.00",
+        evidence: { fileId: "ldg-file-1", line: 21, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+
+      const result = reconcile([l1, l2], [s1, s2], confirmation);
+      const matches = result.results.filter((r) => r.status === "AUTO_MATCH_EXACT");
+      expect(matches).toHaveLength(2);
+      expect(matches.map((m) => m.ledger?.id).sort()).toEqual(["l-claro-1", "l-claro-2"]);
+      expect(matches.map((m) => m.statement?.id).sort()).toEqual(["s-claro-1", "s-claro-2"]);
+    });
+
+    it("5. enforces date tolerance window (<= 2 days matches when name matches clearly; > 2 days in multi-candidate does not)", () => {
+      const sWithin: StatementRecord = {
+        id: "s-embratel",
+        sourceId: "s-embratel",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-22",
+        document: "",
+        history: "PAGAMENTOS A FORNECEDORES - EMBRATEL S.A.",
+        value: "-3000.00",
+        evidence: { fileId: "stmt-file-1", line: 10, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const lWithin: LedgerRecord = {
+        id: "l-embratel",
+        sourceId: "l-embratel",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-20",
+        document: "",
+        history: "BAIXA TIT. - 000002001 - EMBRATEL",
+        value: "-3000.00",
+        evidence: { fileId: "ldg-file-1", line: 20, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+
+      const resWithin = reconcile([lWithin], [sWithin], confirmation);
+      expect(resWithin.results).toHaveLength(1);
+      expect(resWithin.results[0]!.status).toMatch(/^AUTO_MATCH_/);
+
+      const sOut: StatementRecord = {
+        id: "s-out",
+        sourceId: "s-out",
+        bank: "341",
+        agency: "8363",
+        bankAccount: "0000378-4",
+        date: "2026-09-25",
+        document: "",
+        history: "PAGAMENTOS A FORNECEDORES - MULTI FORNECEDOR",
+        value: "-4000.00",
+        evidence: { fileId: "stmt-file-1", line: 12, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+      };
+      const lOut1: LedgerRecord = {
+        id: "l-out-1",
+        sourceId: "l-out-1",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-18",
+        document: "",
+        history: "BAIXA TIT. - MULTI FORNECEDOR",
+        value: "-4000.00",
+        evidence: { fileId: "ldg-file-1", line: 22, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+      const lOut2: LedgerRecord = {
+        id: "l-out-2",
+        sourceId: "l-out-2",
+        company: "EMPRESA",
+        branch: "01",
+        ledgerAccount: "11102012",
+        date: "2026-09-17",
+        document: "",
+        history: "BAIXA TIT. - MULTI FORNECEDOR",
+        value: "-4000.00",
+        evidence: { fileId: "ldg-file-1", line: 23, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+      };
+
+      const resOut = reconcile([lOut1, lOut2], [sOut], confirmation);
+      expect(resOut.results.some((r) => r.status.startsWith("AUTO_MATCH"))).toBe(false);
+      expect(resOut.results.some((r) => r.status === "AMBIGUOUS_MATCH")).toBe(true);
+    });
+  });
 });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { normalizeDocumentId, NON_DOCUMENT_NUMERIC_CODES, isDocumentIdentifier } from "../../normalization.js";
+import { normalizeDocumentId, NON_DOCUMENT_NUMERIC_CODES, isDocumentIdentifier, isTaxIdentifier } from "../../normalization.js";
 
-export { isDocumentIdentifier };
+export { isDocumentIdentifier, isTaxIdentifier };
 
 export const RECONCILIATION_RULE_VERSION = "1.0" as const;
 
@@ -263,6 +263,56 @@ export interface CandidateScoreBreakdown {
   evidence: string[];
 }
 
+export function isTransferOrGenericBanking(text: string | undefined): boolean {
+  if (!text) return false;
+  const raw = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  return /\b(?:TED|PIX|TRANSF|TRANSFERENCIA|DOC|RECEBIMENTOS?|PAGAMENTOS?\s+A\s+FORNECEDORES|TAR\.?\s*BANC|TARIFA)\b/i.test(raw);
+}
+
+export function hasExplicitTitleOrInvoiceNumber(text: string | undefined): boolean {
+  if (!text) return false;
+  const raw = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  const cleaned = raw
+    .replace(/\b(?:TRANSF\.?\s*BANC\.?|TAR\.?\s*BANC\.?)\s*[-–:#/]?\s*\d{3}\s+\d{3,5}\s+\d{3,10}\b/gi, " ")
+    .replace(/\b\d{2,3}\.\d{3}\.\d{3}(?:\/\d{4}-\d{2}|-\d{2})?\b/g, " ")
+    .replace(/\b\d{3}\.\d{3,5}\.(?=[A-Z0-9])/g, " ")
+    .replace(/\b\d{3}\.\d{3,5}\b/g, " ");
+
+  // 1. Explicit Title/Document prefixes
+  if (/\b(?:BAIXA\s+TIT(?:ULO)?\.?|BXA\.?\s*(?:TIT(?:ULO)?\.?|JUROS|DESC|MULTA|ACRESC)?|TIT\.?|TITULO|TITULOS|INCL\.?\s*PA)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.test(cleaned)) {
+    return true;
+  }
+  // 2. Invoice / Tax / Commercial Document prefixes
+  if (/\b(?:NF[-–\s]*E?|NOTA\s+FISCAL|FATURA|FAT|DUP|DUPLICATA|CHQ|CHEQUE|BOL|BOLETO|BORDERO|BORD|DOC(?:TO)?|DOCUMENTO)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.test(cleaned)) {
+    return true;
+  }
+  // 3. Payment prefixes with title/document number
+  if (!/PAGAMENTOS\s+A\s+FORNECEDORES/i.test(raw)) {
+    if (/\b(?:PGTO|PAGTO|PAGAMENTO|LIQ\.?\s*TIT\.?|LIQUIDACAO|DEB\.?\s*T\.?\s*COB|SISPAG|PAGFOR)\b.*?\b0*([1-9]\d{3,12})\b/i.test(cleaned)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isTitleOrInvoice(tx: { description?: string }): boolean {
+  if (hasExplicitTitleOrInvoiceNumber(tx.description)) return true;
+  if (!tx.description) return false;
+  const raw = tx.description.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  return /\b(?:BAIXA\s+TIT|BXA\s+TIT|TITULO|INCL\s+PA|NF|NOTA\s+FISCAL|FATURA|DUPLICATA|BOLETO)\b/i.test(raw);
+}
+
+export function isLikelyAgencyOrOriginCode(doc: string, desc: string | undefined): boolean {
+  if (!doc || !desc) return false;
+  if (!/^\d{1,4}$/.test(doc)) return false;
+  const raw = desc.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  if (new RegExp(`\\b\\d{3}\\.0*${doc}\\.`).test(raw)) return true;
+  if (new RegExp(`\\b0*${doc}\\b`).test(raw) && /\b(?:TED|PIX|TRANSF|TRANSFERENCIA|DOC|RECEBIMENTOS?|PAGAMENTOS?\s+A\s+FORNECEDORES)\b/i.test(raw)) {
+    return true;
+  }
+  return false;
+}
+
 export interface CandidateScoringInput {
   statementDate: string;
   ledgerDate: string;
@@ -334,8 +384,21 @@ export function calculateCandidateScore(input: CandidateScoringInput): Candidate
       evidence.push(`Documento normalizado compatível [${normStmtDoc}] (+40)`);
     }
   } else if (normStmtDoc && normLdgDoc && normStmtDoc !== normLdgDoc) {
-    documentNormalized = -30;
-    evidence.push(`Documento divergente [${normStmtDoc} vs ${normLdgDoc}] (-30)`);
+    const stmtIsTax = isTaxIdentifier(rawStmtDoc) || isTaxIdentifier(normStmtDoc);
+    const ldgIsTax = isTaxIdentifier(rawLdgDoc) || isTaxIdentifier(normLdgDoc);
+    if (stmtIsTax !== ldgIsTax) {
+      documentNormalized = 0;
+      evidence.push("Documentos de naturezas distintas [CNPJ/CPF vs Título] (0)");
+    } else if (
+      (isTransferOrGenericBanking(input.statementDescription) && !hasExplicitTitleOrInvoiceNumber(input.statementDescription)) ||
+      (isTransferOrGenericBanking(input.ledgerHistory) && !hasExplicitTitleOrInvoiceNumber(input.ledgerHistory))
+    ) {
+      documentNormalized = 0;
+      evidence.push("Documentos de naturezas distintas [TED/Transferência vs Título] (0)");
+    } else {
+      documentNormalized = -30;
+      evidence.push(`Documento divergente [${normStmtDoc} vs ${normLdgDoc}] (-30)`);
+    }
   } else if (normStmtDoc || normLdgDoc) {
     evidence.push("Documento presente em apenas um dos lados (0)");
   }
@@ -368,7 +431,13 @@ export function calculateCandidateScore(input: CandidateScoringInput): Candidate
   let descriptionSimilarity = 0;
   const stmtHint = extractFinancialHint(input.statementDescription, normStmtDoc);
   const ldgHint = extractFinancialHint(input.ledgerHistory, normLdgDoc);
-  const similarity = reconciliationTextSimilarity(stmtHint.comparisonTokens, ldgHint.comparisonTokens);
+  const similarity = Math.max(
+    reconciliationTextSimilarity(stmtHint.comparisonTokens, ldgHint.comparisonTokens),
+    counterpartyNameSweepScore(
+      { source: "BANK", description: input.statementDescription },
+      { source: "LEDGER", description: input.ledgerHistory },
+    ),
+  );
   if (similarity >= 0.3) {
     descriptionSimilarity = Math.round(similarity * 15);
     evidence.push(`Similaridade textual relevante [${Math.round(similarity * 100)}%] (+${descriptionSimilarity})`);
@@ -741,8 +810,250 @@ function normalizeCharacters(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
+export const COUNTERPARTY_STOP_WORDS = new Set([
+  "A", "AS", "O", "OS", "DE", "DA", "DO", "DAS", "DOS", "E", "EM", "PARA", "POR", "COM",
+  "LTDA", "LTD", "LT", "SA", "S", "ME", "EPP", "EIRELI", "CIA", "SPE",
+  "PAGAMENTO", "PAGAMENTOS", "FORNECEDOR", "FORNECEDORES", "RECEBIMENTO", "RECEBIMENTOS", "OFFSHORE",
+  "RECEBIDA", "RECEBIDO", "BAIXA", "TIT", "TITULO", "INCL", "PA",
+  "TED", "PIX", "DOC", "TRANSF", "TRANSFERENCIA", "BANC", "BANCARIO",
+  "ITAU", "SISPAG", "PGTO", "PAGTO", "25", "341",
+]);
+
+export const SECTOR_GENERIC_WORDS = new Set([
+  "TECNOLOGIA", "TECNOLOGI", "TECNOLOGICA", "TEC", "TECHNOLOGY", "TECH",
+  "INFORMATICA", "INFORMATIC", "INFORMA", "INFOR", "INFORMACAO",
+  "CONSULTORIA", "CONSULTORI", "CONSULTOR", "CONSULT", "CONSU", "CON",
+  "SERVICOS", "SERVICO", "SERV",
+  "SOLUCOES", "SOLUCO", "SOLUC", "SOLUTION", "SOLUTIONS",
+  "DESENVOLVIMENTO", "DESEN", "DESE",
+  "COMERCIO", "COMERCI",
+  "ENGENHARIA", "SISTEMAS", "GESTAO", "DOCUMENTOS", "LOCACAO", "PRESTACAO",
+  "EMPRESA", "COMPANHIA",
+  "CONCESSIONARIA", "CONCESSIONARI", "CONCESSIONA",
+  "ARRENDATARIA", "ARREND",
+  "BRASIL", "BRASILEIRA", "BRA",
+]);
+
+export interface CounterpartyProfile {
+  primaryTokens: string[];
+  secondaryTokens: string[];
+  allTokens: string[];
+  distinctiveTokens: string[];
+  canonicalKey: string;
+}
+
+export type CounterpartyTransactionLike = {
+  description?: string;
+  source?: ReconciliationSource | string;
+};
+
+export function extractCounterpartyProfile(description: string): CounterpartyProfile {
+  if (!description || !description.trim()) {
+    return {
+      primaryTokens: [],
+      secondaryTokens: [],
+      allTokens: [],
+      distinctiveTokens: [],
+      canonicalKey: "",
+    };
+  }
+
+  let raw = description.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  raw = raw
+    .replace(/\b\d{2}\.\d{3}\.\d{3}\b/g, " ")
+    .replace(/\b\d{2,3}\.\d{3}\.\d{3}(?:\/\d{4}-\d{2}|-\d{2})?\b/g, " ")
+    .replace(/\b\d{3}\.\d{3,5}\.(?=[A-Z0-9])/g, " ")
+    .replace(/\b\d{3}\.\d{3,5}\b/g, " ");
+
+  let cleaned = normalizeCharacters(raw);
+
+  const LEDGER_HEADER = /^(?:BAIXA\s+TIT(?:ULO)?|BXA\s*(?:TIT(?:ULO)?|JUROS|DESC|MULTA|ACRESC)?|INCL\s+PA|LIQ\s+TIT(?:ULO)?|TRANSF\s+BANC|TAR\s+BANC)\s*(?:\d+\s*)*/i;
+  const BANK_HEADER = /^(?:PAGAMENTOS?\s+A\s+FORNECEDORES?|RECEBIMENTOS?(?:\s+OFFSHORE)?|TED(?:\s+RECEBIDA)?|PIX(?:\s+(?:RECEBIDO|ENVIADO|TRANSF))?|PGTO\s+ITAU|SISPAG|PAGFOR)\s*/i;
+
+  cleaned = cleaned.replace(LEDGER_HEADER, "").trim();
+  cleaned = cleaned.replace(BANK_HEADER, "").trim();
+  cleaned = cleaned.replace(LEDGER_HEADER, "").trim();
+  cleaned = cleaned.replace(BANK_HEADER, "").trim();
+
+  cleaned = cleaned.replace(/^(?:\d{3}\s+\d{3,5}\b\s*)/, "");
+  cleaned = cleaned.replace(/\b(?:TED|RECEBIDA)\s+\d{3}\s+\d{3,5}\b/gi, " ");
+
+  cleaned = cleaned.replace(/\b\d{3,}\b/g, " ").replace(/\s+/g, " ").trim();
+
+  const SPLIT_BOUNDARY = /\b(?:PAGAMENTOS?\s+A\s+FORNECEDORES?|TED\s+RECEBIDA|LTDA|LTD)\b/i;
+  const boundaryMatch = SPLIT_BOUNDARY.exec(cleaned);
+  let primarySegment = cleaned;
+  let secondarySegment = "";
+
+  if (boundaryMatch) {
+    primarySegment = cleaned.slice(0, boundaryMatch.index).trim();
+    secondarySegment = cleaned.slice(boundaryMatch.index + boundaryMatch[0].length).trim();
+    if (!primarySegment && secondarySegment) {
+      primarySegment = secondarySegment;
+      secondarySegment = "";
+    }
+  }
+
+  const tokenize = (segment: string): string[] => {
+    if (!segment) return [];
+    return segment
+      .split(/\s+/)
+      .filter((t) => t.length >= 2 && !COUNTERPARTY_STOP_WORDS.has(t));
+  };
+
+  const primaryTokens = tokenize(primarySegment);
+  const secondaryTokens = tokenize(secondarySegment);
+  const allTokens = [...new Set([...primaryTokens, ...secondaryTokens])];
+
+  const primaryDistinctive = primaryTokens.filter((t) => !SECTOR_GENERIC_WORDS.has(t) && t.length >= 2);
+  const allDistinctive = allTokens.filter((t) => !SECTOR_GENERIC_WORDS.has(t) && t.length >= 2);
+  const distinctiveTokens = primaryDistinctive.length > 0 ? primaryDistinctive : allDistinctive;
+
+  return {
+    primaryTokens,
+    secondaryTokens,
+    allTokens,
+    distinctiveTokens,
+    canonicalKey: distinctiveTokens.join(" ") || primaryTokens.join(" "),
+  };
+}
+
+export function tokensMatch(lTok: string, bTok: string): "exact" | "prefix" | false {
+  if (lTok === bTok) return "exact";
+  if (lTok.length >= 3 && bTok.startsWith(lTok)) return "prefix";
+  if (bTok.length >= 4 && lTok.startsWith(bTok)) return "prefix";
+  return false;
+}
+
+export function counterpartyNameSweepScore(
+  left: CounterpartyTransactionLike,
+  right: CounterpartyTransactionLike,
+): number {
+  const leftIsBank = left.source === "BANK" || (!left.source && /PAGAMENTOS?\s+A\s+FORNECEDORES|RECEBIMENTOS|EXTRATO/i.test(left.description || ""));
+  const rightIsBank = right.source === "BANK" || (!right.source && /PAGAMENTOS?\s+A\s+FORNECEDORES|RECEBIMENTOS|EXTRATO/i.test(right.description || ""));
+  let ledger: CounterpartyTransactionLike;
+  let bank: CounterpartyTransactionLike;
+
+  if (leftIsBank && !rightIsBank) {
+    bank = left;
+    ledger = right;
+  } else if (!leftIsBank && rightIsBank) {
+    ledger = left;
+    bank = right;
+  } else {
+    ledger = left;
+    bank = right;
+  }
+
+  const lProf = extractCounterpartyProfile(ledger.description || "");
+  const bProf = extractCounterpartyProfile(bank.description || "");
+
+  if (lProf.allTokens.length === 0 || bProf.allTokens.length === 0) {
+    return 0;
+  }
+
+  let matchedDistinctiveCount = 0;
+  let matchedDistinctiveWeightSum = 0;
+  let allMatchedDistinctiveInPrimary = true;
+
+  if (lProf.distinctiveTokens.length > 0) {
+    for (const dTok of lProf.distinctiveTokens) {
+      let matchedInPrimary = false;
+      let matchedInSecondary = false;
+      let bestWeight = 0;
+
+      for (const bTok of bProf.primaryTokens) {
+        const m = tokensMatch(dTok, bTok);
+        if (m === "exact") {
+          matchedInPrimary = true;
+          bestWeight = Math.max(bestWeight, 1.0);
+          break;
+        } else if (m === "prefix") {
+          matchedInPrimary = true;
+          bestWeight = Math.max(bestWeight, 0.95);
+        }
+      }
+
+      if (!matchedInPrimary) {
+        for (const bTok of bProf.secondaryTokens) {
+          const m = tokensMatch(dTok, bTok);
+          if (m === "exact") {
+            matchedInSecondary = true;
+            bestWeight = Math.max(bestWeight, 0.65);
+            break;
+          } else if (m === "prefix") {
+            matchedInSecondary = true;
+            bestWeight = Math.max(bestWeight, 0.60);
+          }
+        }
+      }
+
+      if (matchedInPrimary) {
+        matchedDistinctiveCount++;
+        matchedDistinctiveWeightSum += bestWeight;
+      } else if (matchedInSecondary) {
+        matchedDistinctiveCount++;
+        matchedDistinctiveWeightSum += bestWeight;
+        allMatchedDistinctiveInPrimary = false;
+      }
+    }
+
+    if (matchedDistinctiveCount === 0) {
+      return 0.15;
+    }
+  } else if (bProf.distinctiveTokens.length > 0) {
+    // Ledger has NO distinctive tokens, but Bank DOES have distinctive tokens
+    return 0.15;
+  }
+
+  // Sweep allTokens against bProf.primaryTokens and bProf.secondaryTokens
+  let matchedWeightSum = 0;
+  for (const lTok of lProf.allTokens) {
+    let bestWeight = 0;
+    for (const bTok of bProf.primaryTokens) {
+      const m = tokensMatch(lTok, bTok);
+      if (m === "exact") {
+        bestWeight = Math.max(bestWeight, 1.0);
+        break;
+      } else if (m === "prefix") {
+        bestWeight = Math.max(bestWeight, 0.95);
+      }
+    }
+
+    if (bestWeight === 0) {
+      for (const bTok of bProf.secondaryTokens) {
+        const m = tokensMatch(lTok, bTok);
+        if (m === "exact") {
+          bestWeight = Math.max(bestWeight, 0.65);
+          break;
+        } else if (m === "prefix") {
+          bestWeight = Math.max(bestWeight, 0.60);
+        }
+      }
+    }
+
+    matchedWeightSum += bestWeight;
+  }
+
+  const coverage = matchedWeightSum / lProf.allTokens.length;
+  const distinctiveCoverage = lProf.distinctiveTokens.length > 0
+    ? matchedDistinctiveWeightSum / lProf.distinctiveTokens.length
+    : coverage;
+
+  let score = 0.65 * distinctiveCoverage + 0.35 * coverage;
+
+  if (lProf.distinctiveTokens.length > 0 && matchedDistinctiveCount > 0 && allMatchedDistinctiveInPrimary) {
+    score = Math.min(1.0, score + 0.08);
+  }
+
+  return Math.round(score * 1000) / 1000;
+}
+
 function transactionSimilarity(left: PreparedTransaction, right: PreparedTransaction): number {
-  return reconciliationTextSimilarity(left.comparisonTokens, right.comparisonTokens);
+  return Math.max(
+    reconciliationTextSimilarity(left.comparisonTokens, right.comparisonTokens),
+    counterpartyNameSweepScore(left, right),
+  );
 }
 
 function groupCandidates(
@@ -821,9 +1132,15 @@ function uniqueValuePairs(
     const ledger = entries.filter((item) => item.source === "LEDGER");
     const pairedIds = new Set<string>();
 
-    // Pass 1: 1:1 Document matching
-    const banksByDocument = indexTransactions(bank.filter((item) => Boolean(item.documentId)), documentKey);
-    const ledgersByDocument = indexTransactions(ledger.filter((item) => Boolean(item.documentId)), documentKey);
+    // Pass 1: 1:1 Document Matching (Non-Tax Explicit Documents)
+    const banksByDocument = indexTransactions(
+      bank.filter((item) => Boolean(item.documentId) && !isTaxIdentifier(item.documentId!) && !isTaxIdentifier(normalizeDocumentId(item.documentId!))),
+      documentKey,
+    );
+    const ledgersByDocument = indexTransactions(
+      ledger.filter((item) => Boolean(item.documentId) && !isTaxIdentifier(item.documentId!) && !isTaxIdentifier(normalizeDocumentId(item.documentId!))),
+      documentKey,
+    );
 
     for (const document of [...banksByDocument.keys()].sort()) {
       const bankMatches = banksByDocument.get(document)!;
@@ -843,7 +1160,7 @@ function uniqueValuePairs(
       pairedIds.add(ledgerMatch.id);
     }
 
-    // Pass 2: Same-Date Matching (Exact Date)
+    // Pass 2: Same-Date Multi-Stage Cascade (0 days difference)
     const openBankForDate = bank.filter((item) => !pairedIds.has(item.id));
     const openLedgerForDate = ledger.filter((item) => !pairedIds.has(item.id));
     const banksByDate = indexTransactions(openBankForDate, (item) => item.postingDate);
@@ -851,160 +1168,433 @@ function uniqueValuePairs(
 
     const allDates = [...new Set([...banksByDate.keys(), ...ledgersByDate.keys()])].sort();
     for (const date of allDates) {
-      const dateBanks = (banksByDate.get(date) ?? []).filter((item) => !pairedIds.has(item.id));
-      const dateLedgers = (ledgersByDate.get(date) ?? []).filter((item) => !pairedIds.has(item.id));
-      if (dateBanks.length === 0 || dateLedgers.length === 0) continue;
+      const getOpenBanks = () => (banksByDate.get(date) ?? []).filter((item) => !pairedIds.has(item.id));
+      const getOpenLedgers = () => (ledgersByDate.get(date) ?? []).filter((item) => !pairedIds.has(item.id));
 
-      // 2A: Exactly 1:1 on this specific date
-      if (dateBanks.length === 1 && dateLedgers.length === 1) {
-        const b = dateBanks[0]!;
-        const l = dateLedgers[0]!;
-        if (!hasDivergentDocument(b, l)) {
-          const score = transactionSimilarity(b, l);
-          pairs.push({ bank: b, ledger: l, sameDate: true, score, matchType: "exact" });
-          pairedIds.add(b.id);
-          pairedIds.add(l.id);
+      // Stage 2A — Iterative Name & Similarity Cascade Loop
+      while (true) {
+        const availBanks = getOpenBanks();
+        const availLedgers = getOpenLedgers();
+        if (availBanks.length === 0 || availLedgers.length === 0) {
+          break;
         }
-        continue;
+
+        if (availBanks.length === 1 && availLedgers.length === 1) {
+          const b = availBanks[0]!;
+          const l = availLedgers[0]!;
+          if (!hasDivergentDocument(b, l)) {
+            pairs.push({
+              bank: b,
+              ledger: l,
+              sameDate: true,
+              score: transactionSimilarity(b, l),
+              matchType: "exact",
+            });
+            pairedIds.add(b.id);
+            pairedIds.add(l.id);
+          }
+          break;
+        }
+
+        type RankedLedger = { ledger: PreparedTransaction; score: number };
+        type RankedBank = { bank: PreparedTransaction; score: number };
+
+        const bToRankedLedgers = new Map<string, RankedLedger[]>();
+        for (const b of availBanks) {
+          const ranked: RankedLedger[] = [];
+          for (const l of availLedgers) {
+            if (!hasDivergentDocument(b, l)) {
+              ranked.push({ ledger: l, score: transactionSimilarity(b, l) });
+            }
+          }
+          ranked.sort((x, y) => y.score - x.score || compareTransactions(x.ledger, y.ledger));
+          bToRankedLedgers.set(b.id, ranked);
+        }
+
+        const lToRankedBanks = new Map<string, RankedBank[]>();
+        for (const l of availLedgers) {
+          const ranked: RankedBank[] = [];
+          for (const b of availBanks) {
+            if (!hasDivergentDocument(b, l)) {
+              ranked.push({ bank: b, score: transactionSimilarity(b, l) });
+            }
+          }
+          ranked.sort((x, y) => y.score - x.score || compareTransactions(x.bank, y.bank));
+          lToRankedBanks.set(l.id, ranked);
+        }
+
+        type CandidatePair = { bank: PreparedTransaction; ledger: PreparedTransaction; score: number };
+        const candidatePairs: CandidatePair[] = [];
+
+        for (const b of availBanks) {
+          const ledgers = bToRankedLedgers.get(b.id) ?? [];
+          if (ledgers.length === 0) continue;
+          const bestLedger = ledgers[0]!;
+          if (bestLedger.score < configuration.rf03.minimumScore) continue;
+          const secondLedgerScore = ledgers.length > 1 ? ledgers[1]!.score : 0;
+
+          const banks = lToRankedBanks.get(bestLedger.ledger.id) ?? [];
+          if (banks.length === 0 || banks[0]!.bank.id !== b.id) continue;
+          const bestBank = banks[0]!;
+          const secondBankScore = banks.length > 1 ? banks[1]!.score : 0;
+
+          const bMargin = bestLedger.score - secondLedgerScore;
+          const lMargin = bestBank.score - secondBankScore;
+
+          const bHasMargin = ledgers.length === 1 || bMargin >= configuration.rf03.minimumMargin;
+          const lHasMargin = banks.length === 1 || lMargin >= configuration.rf03.minimumMargin;
+
+          const condition1 = bHasMargin && lHasMargin;
+          const condition2 =
+            (bHasMargin && bestLedger.score >= 0.65 && (banks.length === 1 || lMargin > 0)) ||
+            (lHasMargin && bestBank.score >= 0.65 && (ledgers.length === 1 || bMargin > 0));
+
+          if (condition1 || condition2) {
+            candidatePairs.push({ bank: b, ledger: bestLedger.ledger, score: bestLedger.score });
+          }
+        }
+
+        candidatePairs.sort(
+          (x, y) => y.score - x.score || compareTransactions(x.bank, y.bank) || compareTransactions(x.ledger, y.ledger),
+        );
+
+        let acceptedInRound = 0;
+        for (const pair of candidatePairs) {
+          if (!pairedIds.has(pair.bank.id) && !pairedIds.has(pair.ledger.id)) {
+            pairs.push({
+              bank: pair.bank,
+              ledger: pair.ledger,
+              sameDate: true,
+              score: pair.score,
+              matchType: "exact",
+            });
+            pairedIds.add(pair.bank.id);
+            pairedIds.add(pair.ledger.id);
+            acceptedInRound++;
+          }
+        }
+
+        if (acceptedInRound === 0) {
+          break;
+        }
       }
 
-      // 2B: Multiple on date - evaluate token similarity / supplier match
-      const availableDateLedgers = dateLedgers.filter((l) => !pairedIds.has(l.id));
-      const availableDateBanks = dateBanks.filter((b) => !pairedIds.has(b.id));
+      // Stage 2B — Two-Pointers Sweep for Same-Counterparty Duplicates on Same Date
+      const remBanks = getOpenBanks();
+      const remLedgers = getOpenLedgers();
+      if (remBanks.length > 0 && remLedgers.length > 0) {
+        const lGroupsByCanonKey = new Map<string, PreparedTransaction[]>();
+        for (const l of remLedgers) {
+          const prof = extractCounterpartyProfile(l.description);
+          if (prof.canonicalKey) {
+            const list = lGroupsByCanonKey.get(prof.canonicalKey);
+            if (list) list.push(l);
+            else lGroupsByCanonKey.set(prof.canonicalKey, [l]);
+          }
+        }
 
-      type CandidatePair = { bank: PreparedTransaction; ledger: PreparedTransaction; score: number };
-      const candidatePairs: CandidatePair[] = [];
+        for (const canonKey of [...lGroupsByCanonKey.keys()].sort()) {
+          const lGroup = (lGroupsByCanonKey.get(canonKey) ?? []).filter((l) => !pairedIds.has(l.id));
+          if (lGroup.length === 0) continue;
+          const refL = lGroup[0]!;
 
-      for (const b of availableDateBanks) {
-        if (b.comparisonTokens.length === 0) continue;
-        const rankedLedgers = availableDateLedgers
-          .filter((l) => !hasDivergentDocument(b, l))
-          .map((l) => ({ ledger: l, score: transactionSimilarity(b, l) }))
-          .sort((x, y) => y.score - x.score || compareTransactions(x.ledger, y.ledger));
+          const bGroup: PreparedTransaction[] = [];
+          for (const b of remBanks) {
+            if (pairedIds.has(b.id)) continue;
+            if (hasDivergentDocument(b, refL)) continue;
+            const scoreOnThis = transactionSimilarity(b, refL);
+            if (scoreOnThis < configuration.rf03.minimumScore) continue;
 
-        if (rankedLedgers.length === 0) continue;
-        const best = rankedLedgers[0]!;
-        const secondScore = rankedLedgers.length > 1 ? rankedLedgers[1]!.score : 0;
+            let betterOtherExists = false;
+            for (const [otherKey, otherGroup] of lGroupsByCanonKey) {
+              if (otherKey === canonKey) continue;
+              const activeOther = otherGroup.filter((item) => !pairedIds.has(item.id));
+              if (activeOther.length === 0) continue;
+              const otherScore = transactionSimilarity(b, activeOther[0]!);
+              if (otherScore > scoreOnThis) {
+                betterOtherExists = true;
+                break;
+              }
+            }
 
-        if (
-          best.score >= configuration.rf03.minimumScore &&
-          (rankedLedgers.length === 1 || best.score - secondScore >= configuration.rf03.minimumMargin)
-        ) {
-          const rankedBanks = availableDateBanks
-            .filter((candidateBank) => !hasDivergentDocument(candidateBank, best.ledger))
-            .map((candidateBank) => ({ bank: candidateBank, score: transactionSimilarity(candidateBank, best.ledger) }))
-            .sort((x, y) => y.score - x.score || compareTransactions(x.bank, y.bank));
+            if (!betterOtherExists) {
+              bGroup.push(b);
+            }
+          }
 
-          if (rankedBanks.length > 0 && rankedBanks[0]!.bank.id === b.id) {
-            const secondBankScore = rankedBanks.length > 1 ? rankedBanks[1]!.score : 0;
-            if (rankedBanks.length === 1 || rankedBanks[0]!.score - secondBankScore >= configuration.rf03.minimumMargin) {
-              candidatePairs.push({ bank: b, ledger: best.ledger, score: best.score });
+          if (bGroup.length > 0) {
+            bGroup.sort(compareTransactions);
+            lGroup.sort(compareTransactions);
+            const count = Math.min(bGroup.length, lGroup.length);
+            for (let i = 0; i < count; i++) {
+              const b = bGroup[i]!;
+              const l = lGroup[i]!;
+              pairs.push({
+                bank: b,
+                ledger: l,
+                sameDate: true,
+                score: transactionSimilarity(b, l),
+                matchType: "exact",
+              });
+              pairedIds.add(b.id);
+              pairedIds.add(l.id);
             }
           }
         }
       }
 
-      candidatePairs.sort((x, y) => y.score - x.score || compareTransactions(x.bank, y.bank));
-      for (const pair of candidatePairs) {
-        if (!pairedIds.has(pair.bank.id) && !pairedIds.has(pair.ledger.id)) {
-          pairs.push({ bank: pair.bank, ledger: pair.ledger, sameDate: true, score: pair.score, matchType: "exact" });
-          pairedIds.add(pair.bank.id);
-          pairedIds.add(pair.ledger.id);
+      // Stage 2C — Residual Same-Date Equal-Count Parity Sweep (User Rule 1)
+      const finalBanks = getOpenBanks();
+      const finalLedgers = getOpenLedgers();
+      if (finalBanks.length === 1 && finalLedgers.length === 1) {
+        const b = finalBanks[0]!;
+        const l = finalLedgers[0]!;
+        if (!hasDivergentDocument(b, l)) {
+          const bProf = extractCounterpartyProfile(b.description);
+          const lProf = extractCounterpartyProfile(l.description);
+          const hasConflictingDistinctive =
+            bProf.distinctiveTokens.length > 0 &&
+            lProf.distinctiveTokens.length > 0 &&
+            transactionSimilarity(b, l) < configuration.rf03.minimumScore;
+          if (!hasConflictingDistinctive) {
+            pairs.push({
+              bank: b,
+              ledger: l,
+              sameDate: true,
+              score: transactionSimilarity(b, l),
+              matchType: "exact",
+            });
+            pairedIds.add(b.id);
+            pairedIds.add(l.id);
+          }
         }
       }
     }
 
     // Pass 3: Date Tolerance Window (if dateToleranceDays > 0)
     if (dateToleranceDays > 0) {
-      const openBankForWindow = bank.filter((item) => !pairedIds.has(item.id));
-      const openLedgerForWindow = ledger.filter((item) => !pairedIds.has(item.id));
+      while (true) {
+        const openBanks = bank.filter((item) => !pairedIds.has(item.id));
+        const openLedgers = ledger.filter((item) => !pairedIds.has(item.id));
+        if (openBanks.length === 0 || openLedgers.length === 0) break;
 
-      for (const b of openBankForWindow) {
-        if (pairedIds.has(b.id)) continue;
-        const windowLedgers = openLedgerForWindow
-          .filter((l) => !pairedIds.has(l.id) && dateDifference(b.postingDate, l.postingDate) <= dateToleranceDays && !hasDivergentDocument(b, l))
-          .map((l) => ({
-            ledger: l,
-            score: transactionSimilarity(b, l),
-            distance: dateDifference(b.postingDate, l.postingDate),
-          }))
-          .sort((x, y) => y.score - x.score || x.distance - y.distance || compareTransactions(x.ledger, y.ledger));
+        let acceptedInPass3Round = 0;
 
-        if (windowLedgers.length === 0) continue;
-
-        if (windowLedgers.length === 1) {
-          const onlyLedger = windowLedgers[0]!.ledger;
-          const reverseBanks = openBankForWindow.filter(
-            (candidateBank) =>
-              !pairedIds.has(candidateBank.id) &&
-              dateDifference(candidateBank.postingDate, onlyLedger.postingDate) <= dateToleranceDays &&
-              !hasDivergentDocument(candidateBank, onlyLedger),
-          );
-          if (reverseBanks.length === 1) {
-            pairs.push({
-              bank: b,
-              ledger: onlyLedger,
-              sameDate: b.postingDate === onlyLedger.postingDate,
-              score: windowLedgers[0]!.score,
-              matchType: "date-window",
-            });
-            pairedIds.add(b.id);
-            pairedIds.add(onlyLedger.id);
+        // Stage 3A: Mutually-best candidates
+        type RankedItem<T> = { item: T; score: number; distance: number };
+        const bToLedgers = new Map<string, RankedItem<PreparedTransaction>[]>();
+        for (const b of openBanks) {
+          const list: RankedItem<PreparedTransaction>[] = [];
+          for (const l of openLedgers) {
+            const dist = dateDifference(b.postingDate, l.postingDate);
+            if (dist <= dateToleranceDays && !hasDivergentDocument(b, l)) {
+              list.push({ item: l, score: transactionSimilarity(b, l), distance: dist });
+            }
           }
-        } else {
-          const best = windowLedgers[0]!;
-          const second = windowLedgers[1]!;
-          if (
-            best.score >= configuration.rf03.minimumScore &&
-            best.score - second.score >= configuration.rf03.minimumMargin
-          ) {
-            const reverseBanks = openBankForWindow
-              .filter(
-                (candidateBank) =>
-                  !pairedIds.has(candidateBank.id) &&
-                  dateDifference(candidateBank.postingDate, best.ledger.postingDate) <= dateToleranceDays &&
-                  !hasDivergentDocument(candidateBank, best.ledger),
-              )
-              .map((candidateBank) => ({
-                bank: candidateBank,
-                score: transactionSimilarity(candidateBank, best.ledger),
-                distance: dateDifference(candidateBank.postingDate, best.ledger.postingDate),
-              }))
-              .sort((x, y) => y.score - x.score || x.distance - y.distance || compareTransactions(x.bank, y.bank));
+          list.sort((x, y) => y.score - x.score || x.distance - y.distance || compareTransactions(x.item, y.item));
+          bToLedgers.set(b.id, list);
+        }
 
-            if (reverseBanks.length > 0 && reverseBanks[0]!.bank.id === b.id) {
-              const secondBank = reverseBanks.length > 1 ? reverseBanks[1]! : undefined;
-              if (!secondBank || reverseBanks[0]!.score - secondBank.score >= configuration.rf03.minimumMargin) {
+        const lToBanks = new Map<string, RankedItem<PreparedTransaction>[]>();
+        for (const l of openLedgers) {
+          const list: RankedItem<PreparedTransaction>[] = [];
+          for (const b of openBanks) {
+            const dist = dateDifference(b.postingDate, l.postingDate);
+            if (dist <= dateToleranceDays && !hasDivergentDocument(b, l)) {
+              list.push({ item: b, score: transactionSimilarity(b, l), distance: dist });
+            }
+          }
+          list.sort((x, y) => y.score - x.score || x.distance - y.distance || compareTransactions(x.item, y.item));
+          lToBanks.set(l.id, list);
+        }
+
+        type WindowCandidatePair = {
+          bank: PreparedTransaction;
+          ledger: PreparedTransaction;
+          score: number;
+          distance: number;
+        };
+        const windowCandidatePairs: WindowCandidatePair[] = [];
+
+        for (const b of openBanks) {
+          const ledgers = bToLedgers.get(b.id) ?? [];
+          if (ledgers.length === 0) continue;
+          const bestL = ledgers[0]!;
+          if (bestL.score < configuration.rf03.minimumScore) continue;
+          const secondLScore = ledgers.length > 1 ? ledgers[1]!.score : 0;
+          if (ledgers.length > 1 && bestL.score - secondLScore < configuration.rf03.minimumMargin) continue;
+
+          const banks = lToBanks.get(bestL.item.id) ?? [];
+          if (banks.length === 0 || banks[0]!.item.id !== b.id) continue;
+          const bestB = banks[0]!;
+          const secondBScore = banks.length > 1 ? banks[1]!.score : 0;
+          if (banks.length > 1 && bestB.score - secondBScore < configuration.rf03.minimumMargin) continue;
+
+          windowCandidatePairs.push({
+            bank: b,
+            ledger: bestL.item,
+            score: bestL.score,
+            distance: bestL.distance,
+          });
+        }
+
+        windowCandidatePairs.sort(
+          (x, y) =>
+            y.score - x.score ||
+            x.distance - y.distance ||
+            compareTransactions(x.bank, y.bank) ||
+            compareTransactions(x.ledger, y.ledger),
+        );
+
+        for (const pair of windowCandidatePairs) {
+          if (!pairedIds.has(pair.bank.id) && !pairedIds.has(pair.ledger.id)) {
+            const sameDate = pair.bank.postingDate === pair.ledger.postingDate;
+            pairs.push({
+              bank: pair.bank,
+              ledger: pair.ledger,
+              sameDate,
+              score: pair.score,
+              matchType: sameDate ? "exact" : "date-window",
+            });
+            pairedIds.add(pair.bank.id);
+            pairedIds.add(pair.ledger.id);
+            acceptedInPass3Round++;
+          }
+        }
+
+        if (acceptedInPass3Round > 0) continue;
+
+        // Stage 3B: Same-counterparty duplicates within date window if bGroup.length === lGroup.length and score >= 0.65
+        const curBanks = openBanks.filter((item) => !pairedIds.has(item.id));
+        const curLedgers = openLedgers.filter((item) => !pairedIds.has(item.id));
+        if (curBanks.length > 0 && curLedgers.length > 0) {
+          const lGroupsByCanonKey = new Map<string, PreparedTransaction[]>();
+          for (const l of curLedgers) {
+            const prof = extractCounterpartyProfile(l.description);
+            if (prof.canonicalKey) {
+              const list = lGroupsByCanonKey.get(prof.canonicalKey);
+              if (list) list.push(l);
+              else lGroupsByCanonKey.set(prof.canonicalKey, [l]);
+            }
+          }
+
+          for (const canonKey of [...lGroupsByCanonKey.keys()].sort()) {
+            const lGroup = (lGroupsByCanonKey.get(canonKey) ?? []).filter((l) => !pairedIds.has(l.id));
+            if (lGroup.length === 0) continue;
+            const refL = lGroup[0]!;
+
+            const bGroup: PreparedTransaction[] = [];
+            for (const b of curBanks) {
+              if (pairedIds.has(b.id)) continue;
+              if (dateDifference(b.postingDate, refL.postingDate) > dateToleranceDays) continue;
+              if (hasDivergentDocument(b, refL)) continue;
+              const score = transactionSimilarity(b, refL);
+              if (score >= 0.65) {
+                bGroup.push(b);
+              }
+            }
+
+            if (bGroup.length > 0 && bGroup.length === lGroup.length) {
+              bGroup.sort(compareTransactions);
+              lGroup.sort(compareTransactions);
+              for (let i = 0; i < bGroup.length; i++) {
+                const b = bGroup[i]!;
+                const l = lGroup[i]!;
+                const sameDate = b.postingDate === l.postingDate;
                 pairs.push({
                   bank: b,
-                  ledger: best.ledger,
-                  sameDate: b.postingDate === best.ledger.postingDate,
-                  score: best.score,
-                  matchType: "date-window",
+                  ledger: l,
+                  sameDate,
+                  score: transactionSimilarity(b, l),
+                  matchType: sameDate ? "exact" : "date-window",
                 });
                 pairedIds.add(b.id);
-                pairedIds.add(best.ledger.id);
+                pairedIds.add(l.id);
+                acceptedInPass3Round++;
               }
             }
           }
         }
+
+        if (acceptedInPass3Round > 0) continue;
+
+        // Stage 3C: Unique 1:1 in date tolerance window
+        const remBanks = openBanks.filter((item) => !pairedIds.has(item.id));
+        const remLedgers = openLedgers.filter((item) => !pairedIds.has(item.id));
+
+        for (const b of remBanks) {
+          if (pairedIds.has(b.id)) continue;
+          const windowLedgers = remLedgers.filter(
+            (l) =>
+              !pairedIds.has(l.id) &&
+              dateDifference(b.postingDate, l.postingDate) <= dateToleranceDays &&
+              !hasDivergentDocument(b, l),
+          );
+
+          if (windowLedgers.length === 1) {
+            const onlyLedger = windowLedgers[0]!;
+            const reverseBanks = remBanks.filter(
+              (candidateBank) =>
+                !pairedIds.has(candidateBank.id) &&
+                dateDifference(candidateBank.postingDate, onlyLedger.postingDate) <= dateToleranceDays &&
+                !hasDivergentDocument(candidateBank, onlyLedger),
+            );
+
+            if (reverseBanks.length === 1) {
+              const bProf = extractCounterpartyProfile(b.description);
+              const lProf = extractCounterpartyProfile(onlyLedger.description);
+              const hasConflictingNames =
+                b.postingDate !== onlyLedger.postingDate &&
+                bProf.distinctiveTokens.length > 0 &&
+                lProf.distinctiveTokens.length > 0 &&
+                transactionSimilarity(b, onlyLedger) < configuration.rf03.minimumScore;
+
+              if (!hasConflictingNames) {
+                const sameDate = b.postingDate === onlyLedger.postingDate;
+                pairs.push({
+                  bank: b,
+                  ledger: onlyLedger,
+                  sameDate,
+                  score: transactionSimilarity(b, onlyLedger),
+                  matchType: sameDate ? "exact" : "date-window",
+                });
+                pairedIds.add(b.id);
+                pairedIds.add(onlyLedger.id);
+                acceptedInPass3Round++;
+              }
+            }
+          }
+        }
+
+        if (acceptedInPass3Round === 0) break;
       }
     }
 
     // Pass 4: Unique Value in Period (Residual 1:1)
     const remainingBank = bank.filter((item) => !pairedIds.has(item.id));
     const remainingLedger = ledger.filter((item) => !pairedIds.has(item.id));
-    if (remainingBank.length === 1 && remainingLedger.length === 1 && !hasDivergentDocument(remainingBank[0]!, remainingLedger[0]!)) {
-      const sameDate = remainingBank[0]!.postingDate === remainingLedger[0]!.postingDate;
-      pairs.push({
-        bank: remainingBank[0]!,
-        ledger: remainingLedger[0]!,
-        sameDate,
-        score: transactionSimilarity(remainingBank[0]!, remainingLedger[0]!),
-        matchType: sameDate ? "exact" : "unique-value",
-      });
-      pairedIds.add(remainingBank[0]!.id);
-      pairedIds.add(remainingLedger[0]!.id);
+    if (remainingBank.length === 1 && remainingLedger.length === 1) {
+      const b = remainingBank[0]!;
+      const l = remainingLedger[0]!;
+      if (!hasDivergentDocument(b, l)) {
+        const isOriginal1to1 = bank.length === 1 && ledger.length === 1;
+        const isWithinDateTol = dateDifference(b.postingDate, l.postingDate) <= dateToleranceDays;
+        const score = transactionSimilarity(b, l);
+        const hasSufficientScore = score >= configuration.rf03.minimumScore;
+
+        if (isOriginal1to1 || isWithinDateTol || hasSufficientScore) {
+          const sameDate = b.postingDate === l.postingDate;
+          pairs.push({
+            bank: b,
+            ledger: l,
+            sameDate,
+            score,
+            matchType: sameDate ? "exact" : "unique-value",
+          });
+          pairedIds.add(b.id);
+          pairedIds.add(l.id);
+        }
+      }
     }
   }
   return pairs;
@@ -1083,10 +1673,42 @@ type ExactLedgerGroup = {
 export function hasDivergentDocument(left: PreparedTransaction, right: PreparedTransaction): boolean {
   const leftDoc = left.documentId ? normalizeDocumentId(left.documentId) : "";
   const rightDoc = right.documentId ? normalizeDocumentId(right.documentId) : "";
-  if (leftDoc && rightDoc && isDocumentIdentifier(leftDoc) && isDocumentIdentifier(rightDoc) && leftDoc !== rightDoc) {
-    return true;
+  if (!leftDoc || !rightDoc || leftDoc === rightDoc) {
+    return false;
   }
-  return false;
+
+  const leftIsTax = isTaxIdentifier(left.documentId) || isTaxIdentifier(leftDoc);
+  const rightIsTax = isTaxIdentifier(right.documentId) || isTaxIdentifier(rightDoc);
+
+  // A CPF/CNPJ on one side must NEVER conflict with an internal ERP title number on the other side
+  if (leftIsTax !== rightIsTax) {
+    return false;
+  }
+
+  // If both are tax identifiers, compare digits-only
+  if (leftIsTax && rightIsTax) {
+    return leftDoc.replace(/\D/g, "") !== rightDoc.replace(/\D/g, "");
+  }
+
+  // Both must be valid document identifiers
+  if (!isDocumentIdentifier(leftDoc) || !isDocumentIdentifier(rightDoc)) {
+    return false;
+  }
+
+  // If either side is an agency/origin code from a bank transfer (e.g. "1306", "4263", "0231", "4280")
+  if (isLikelyAgencyOrOriginCode(leftDoc, left.description) || isLikelyAgencyOrOriginCode(rightDoc, right.description)) {
+    return false;
+  }
+
+  const leftIsTransfer = isTransferOrGenericBanking(left.description) && !hasExplicitTitleOrInvoiceNumber(left.description);
+  const rightIsTransfer = isTransferOrGenericBanking(right.description) && !hasExplicitTitleOrInvoiceNumber(right.description);
+
+  // If either side is a transfer without explicit title, it must not conflict
+  if (leftIsTransfer || rightIsTransfer) {
+    return false;
+  }
+
+  return true;
 }
 
 class ExactLedgerCandidates {
@@ -1262,7 +1884,7 @@ class WindowLedgerCandidates {
       const group = entry.candidates.groupFor(ledger);
       entry.candidates.consume(group);
       return {
-        selected: { ledger, score: transactionSimilarity(bank, ledger) },
+        selected: { ledger, score: reconciliationTextSimilarity(bank.comparisonTokens, ledger.comparisonTokens) },
         signatureGroupsEvaluated: 1,
       };
     }

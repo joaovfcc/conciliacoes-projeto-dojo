@@ -29,6 +29,10 @@ export async function parseTabularStatement(
   const balanceMovements: StatementRecord[] = [];
   let openingBalance: string | undefined;
   let closingBalance: string | undefined;
+  let detectedParserId: string | undefined;
+  let detectedBank: string | undefined;
+  let detectedAgency: string | undefined;
+  let detectedAccount: string | undefined;
 
   // Prefer sheets classified as TRANSACTIONAL; fall back to visible non-empty sheets if none match
   const transactionalSheets = doc.sheets.filter((sheet) => classifySheet(sheet).role === "TRANSACTIONAL");
@@ -79,6 +83,11 @@ export async function parseTabularStatement(
     const sheetBank = profile.bankCode || parsed.metadata?.bank || "";
     const sheetAgency = parsed.metadata?.agency || "";
     const sheetAccount = parsed.metadata?.account || "";
+    if (profile.id && !detectedParserId) detectedParserId = profile.id;
+    if (sheetBank && !detectedBank) detectedBank = sheetBank;
+    if (sheetAgency && !detectedAgency) detectedAgency = sheetAgency;
+    if (sheetAccount && !detectedAccount) detectedAccount = sheetAccount;
+
     if (parsed.metadata?.openingBalance !== undefined && openingBalance === undefined) {
       openingBalance = money(parsed.metadata.openingBalance);
     }
@@ -113,7 +122,7 @@ export async function parseTabularStatement(
 
   if (records.length === 0) {
     issues.push(
-      issue("ERROR", "TABULAR_SEM_MOVIMENTOS", "Nenhum movimento conciliável encontrado no arquivo tabular.", file.id),
+      issue("WARNING", "TABULAR_SEM_MOVIMENTOS", "Nenhum movimento conciliável encontrado no arquivo tabular.", file.id),
     );
   }
 
@@ -121,12 +130,18 @@ export async function parseTabularStatement(
     file,
     records,
     "TABULAR",
-    records[0]?.evidence?.parser || "GENERIC_TABULAR",
+    records[0]?.evidence?.parser || detectedParserId || "GENERIC_TABULAR",
     [],
     {
       ...(openingBalance !== undefined ? { openingBalance } : {}),
       ...(closingBalance !== undefined ? { closingBalance } : {}),
       balanceMovements,
+    },
+    {
+      bank: detectedBank,
+      agency: detectedAgency,
+      account: detectedAccount,
+      reconciliationEligible: records.length > 0,
     },
   );
   return { records, metadata, issues, investments: [] };

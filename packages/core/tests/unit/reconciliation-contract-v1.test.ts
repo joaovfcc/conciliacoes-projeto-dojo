@@ -121,7 +121,7 @@ describe("reconciliation contract v1", () => {
     );
   });
 
-  it.each(["01", "+1", "1.00", "-0", " 1", "1 "])("rejeita centavos não canônicos: %s", (amountCents) => {
+  it.each(["01", "+1", "1.00", "-0", " 1", "1 "])("rejeita centavos não canônicos: %s", (amountCents: string) => {
     const request = mutableRequest();
     request.bankTransactions = [canonicalTransactionFixture("bank-invalid", "BANK", { amountCents })];
     expect(validateReconciliationRequestV1(request)).toContainEqual(
@@ -209,7 +209,7 @@ describe("reconciliation contract v1", () => {
     ["metrics.combinationsEvaluated", (result: Record<string, unknown>) => {
       (result.metrics as Record<string, unknown>).combinationsEvaluated = -1;
     }],
-  ])("desserialização rejeita result malformado em %s", (_field, mutate) => {
+  ])("desserialização rejeita result malformado em %s", (_field: string, mutate: (result: Record<string, unknown>) => void) => {
     const request = reconciliationRequestFixture();
     const output = new ReconciliationEngine(0, 3, { evaluatedAt: request.requestedAt }).run(
       toReconciliationEngineTransactionsV1(request),
@@ -267,7 +267,7 @@ describe("reconciliation contract v1", () => {
       const bank = (result.transactions as Array<Record<string, unknown>>).find((transaction) => transaction.source === "BANK")!;
       bank.postingDate = "2025-12-11";
     }],
-  ])("desserialização rejeita incoerência semântica em %s", (_case, mutate) => {
+  ])("desserialização rejeita incoerência semântica em %s", (_case: string, mutate: (result: Record<string, unknown>) => void) => {
     const request = reconciliationRequestFixture();
     const output = new ReconciliationEngine(0, 3, { evaluatedAt: request.requestedAt }).run(
       toReconciliationEngineTransactionsV1(request),

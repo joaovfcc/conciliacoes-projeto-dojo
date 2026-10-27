@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 import { parseTabularStatement } from "../../../src/parsers/tabular.js";
+import { preflightFiles } from "../../../src/preflight.js";
 import { BRADESCO_CHECKING_XLSX_V1 } from "../../../src/statements/profiles/bradesco-checking-xlsx-v1.js";
 import { BB_CHECKING_XLSX_V1 } from "../../../src/statements/profiles/bb-checking-xlsx-v1.js";
 import { SANTANDER_CHECKING_XLSX_V1 } from "../../../src/statements/profiles/santander-checking-xlsx-v1.js";
@@ -261,4 +262,143 @@ describe("Multi-bank XLSX profile detection", () => {
     expect(records[0]!.value).toBe("-120.00");
     expect(records[1]!.value).toBe("200.00");
   });
+
+  it("identifica leiaute e metadados de extrato Bradesco sem lançamentos ignorando rodapés de totalizador", async () => {
+    const buffer = await createXlsxBuffer("Lançamentos", [
+      ["Atualização:", "31/12/2025 10:20:00"],
+      ["Nome:", "SPREAD SISTEMAS E AUTOMACAO LTDA"],
+      ["Agência:", "3394"],
+      ["Conta:", "0002823-1"],
+      ["Lançamentos"],
+      ["Periodo:", "01/12/2025 até 31/12/2025"],
+      [],
+      ["Data", "Lançamento", "Ag/origem", "Razão Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["01/08/2026", "EXTRATO MENSAL / POR PERÍODO SPREAD SISTEMAS E AUTOMACAO LTDA", "25", "AGÊNCIA: 3394 | CONTA: 0002823-1", "03394", "242.87", "242.87"],
+      ["01/08/2026", "TOTAL R$", "25", "DISPONÍVEL PRODUTO SALDO R$", "25", "242.87", "242.87"],
+      ["01/08/2026", "TOTAL DISPONÍVEL", "25", "25", "25", "242.87", ""],
+      ["01/08/2026", "CONTA-CORRENTE", "25", "NÃO HÁ LANÇAMENTOS PARA ESTE TIPO DE EXTRATO. (SMC.WSE.0004) ÚLTIMOS LANÇAMENTOS NÃO HÁ LANÇAMENTOS PARA ESTE TIPO DE EXTRATO. (SMC.WSE.0004) SALDOS INVEST FÁCIL / PLUS NÃO HÁ LANÇAMENTOS/OPERAÇÕES PARA O PERÍODO SELECIONADO. (SMC.WSI.0666)", "25", "242.87", ""],
+    ]);
+
+    const { records, metadata } = await parseTabularStatement(input("bradesco-sem-movimentacao", buffer), ALL_PROFILES);
+
+    expect(metadata.parser).toBe("bradesco-checking-xlsx-v1");
+    expect(metadata.bank).toBe("237");
+    expect(metadata.agency).toBe("3394");
+    expect(metadata.account).toBe("0002823-1");
+    // Não deve extrair linhas de totalizador como lançamentos
+    expect(records).toHaveLength(0);
+  });
+
+  it("identifica leiaute e metadados de extrato Bradesco completamente vazio (sem linhas de lançamento)", async () => {
+    const buffer = await createXlsxBuffer("Lançamentos", [
+      ["Atualização:", "31/12/2025 10:21:00"],
+      ["Nome:", "SPREAD SISTEMAS E AUTOMACAO LTDA"],
+      ["Agência:", "3394"],
+      ["Conta:", "0003565-3"],
+      ["Lançamentos"],
+      ["Periodo:", "01/12/2025 até 31/12/2025"],
+      [],
+      ["Data", "Lançamento", "Ag/origem", "Razão Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["01/08/2026", "CONTA-CORRENTE", "25", "NÃO HÁ LANÇAMENTOS PARA ESTE TIPO DE EXTRATO. (SMC.WSE.0004)", "25", "0.00", "0.00"],
+    ]);
+
+    const { records, metadata } = await parseTabularStatement(input("bradesco-totalmente-vazio", buffer), ALL_PROFILES);
+
+    expect(metadata.parser).toBe("bradesco-checking-xlsx-v1");
+    expect(metadata.bank).toBe("237");
+    expect(metadata.agency).toBe("3394");
+    expect(metadata.account).toBe("0003565-3");
+    expect(records).toHaveLength(0);
+  });
+
+  it("preflight processa simultaneamente extratos com e sem movimentações sem gerar falso período e preservando metadados", async () => {
+    const ledgerCsv = `DATE,COMPANY,BRANCH,ACCOUNT,DOCUMENT,HISTORY,VALUE
+05/12/2025,01,01,1.1.1.01.001,DOC123,PAGTO FORNECEDOR,-500.00
+10/12/2025,01,01,1.1.1.01.001,DOC124,RECEBIMENTO CLIENTE,1200.00`;
+
+    const ledgerFile: SourceFileInput = {
+      id: "ledger-main",
+      originalName: "razao.csv",
+      kind: "LEDGER",
+      contentType: "text/csv",
+      buffer: Buffer.from(ledgerCsv),
+    };
+
+    const movBuffer = await createXlsxBuffer("Lançamentos", [
+      ["Atualização:", "31/12/2025 10:20:00"],
+      ["Nome:", "EMPRESA TESTE LTDA"],
+      ["Agência:", "3394"],
+      ["Conta:", "0001111-1"],
+      ["Lançamentos"],
+      ["Periodo:", "01/12/2025 até 31/12/2025"],
+      [],
+      ["Data", "Lançamento", "Ag/origem", "Razão Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["05/12/2025", "PAGTO FORNECEDOR", "25", "FORNECEDOR X", "12345", "-500.00", "500.00"],
+      ["10/12/2025", "RECEBIMENTO CLIENTE", "25", "CLIENTE Y", "67890", "1200.00", "1700.00"],
+    ]);
+
+    const emptyBuffer1 = await createXlsxBuffer("Lançamentos", [
+      ["Atualização:", "31/12/2025 10:20:00"],
+      ["Nome:", "EMPRESA TESTE LTDA"],
+      ["Agência:", "3394"],
+      ["Conta:", "0002823-1"],
+      ["Lançamentos"],
+      ["Periodo:", "01/12/2025 até 31/12/2025"],
+      [],
+      ["Data", "Lançamento", "Ag/origem", "Razão Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["01/08/2026", "EXTRATO MENSAL / POR PERÍODO EMPRESA TESTE LTDA", "25", "AGÊNCIA: 3394 | CONTA: 0002823-1", "03394", "242.87", "242.87"],
+      ["01/08/2026", "TOTAL R$", "25", "DISPONÍVEL PRODUTO SALDO R$", "25", "242.87", "242.87"],
+      ["01/08/2026", "CONTA-CORRENTE", "25", "NÃO HÁ LANÇAMENTOS PARA ESTE TIPO DE EXTRATO. (SMC.WSE.0004)", "25", "242.87", ""],
+    ]);
+
+    const emptyBuffer2 = await createXlsxBuffer("Lançamentos", [
+      ["Atualização:", "31/12/2025 10:21:00"],
+      ["Nome:", "EMPRESA TESTE LTDA"],
+      ["Agência:", "3394"],
+      ["Conta:", "0003565-3"],
+      ["Lançamentos"],
+      ["Periodo:", "01/12/2025 até 31/12/2025"],
+      [],
+      ["Data", "Lançamento", "Ag/origem", "Razão Social", "CPF/CNPJ", "Valor (R$)", "Saldo (R$)"],
+      ["01/08/2026", "CONTA-CORRENTE", "25", "NÃO HÁ LANÇAMENTOS PARA ESTE TIPO DE EXTRATO. (SMC.WSE.0004)", "25", "0.00", "0.00"],
+    ]);
+
+    const stmt1 = input("bradesco-mov", movBuffer);
+    const stmt2 = input("bradesco-empty-1", emptyBuffer1);
+    const stmt3 = input("bradesco-empty-2", emptyBuffer2);
+
+    const { preflight } = await preflightFiles(ledgerFile, [stmt1, stmt2, stmt3]);
+
+    // Não deve conter erros fatais (warnings permitidos)
+    expect(preflight.issues.filter((i) => i.severity === "ERROR")).toHaveLength(0);
+
+    // Deve conter única competência 202512 — sem períodos espúrios (como 202608)
+    expect(preflight.detectedPeriods).toEqual([{ period: "202512", recordCount: 4 }]);
+
+    // Deve listar todos os 3 extratos
+    expect(preflight.statements).toHaveLength(3);
+
+    // Extrato 1 com movimentos é elegível para conciliação
+    expect(preflight.statements[0]?.reconciliationEligible).toBe(true);
+    expect(preflight.statements[0]?.recordCount).toBe(2);
+    expect(preflight.statements[0]?.bank).toBe("237");
+    expect(preflight.statements[0]?.agency).toBe("3394");
+    expect(preflight.statements[0]?.account).toBe("0001111-1");
+
+    // Extrato 2 sem movimentos é informativo (não elegível), mas preserva agência e conta
+    expect(preflight.statements[1]?.reconciliationEligible).toBe(false);
+    expect(preflight.statements[1]?.recordCount).toBe(0);
+    expect(preflight.statements[1]?.bank).toBe("237");
+    expect(preflight.statements[1]?.agency).toBe("3394");
+    expect(preflight.statements[1]?.account).toBe("0002823-1");
+
+    // Extrato 3 totalmente vazio é informativo (não elegível), mas preserva agência e conta
+    expect(preflight.statements[2]?.reconciliationEligible).toBe(false);
+    expect(preflight.statements[2]?.recordCount).toBe(0);
+    expect(preflight.statements[2]?.bank).toBe("237");
+    expect(preflight.statements[2]?.agency).toBe("3394");
+    expect(preflight.statements[2]?.account).toBe("0003565-3");
+  });
 });
+
+

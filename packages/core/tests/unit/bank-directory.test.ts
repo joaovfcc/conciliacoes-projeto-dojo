@@ -25,7 +25,7 @@ describe("catálogo escalável de instituições bancárias", () => {
     ["Sicredi", "SICREDI", "748"],
     ["Sicoob", "SICOOB", "756"],
     ["BTG Pactual", "BTG_PACTUAL", "208"],
-  ])("resolve '%s'", (input, institutionId, bankCode) => {
+  ])("resolve '%s'", (input: string, institutionId: string, bankCode: string) => {
     expect(resolveBankInstitution(input)).toMatchObject({ institutionId, bankCode });
   });
 

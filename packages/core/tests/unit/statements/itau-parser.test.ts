@@ -183,6 +183,46 @@ describe("Itaú Checking XLSX Parser Characterization", () => {
     expect(metadata.balanceCheck).toMatchObject({ status: "PASSED", movementTotal: "10.00" });
   });
 
+  it("ignores trailing summary rows in the amount column without overwriting closingBalance or competences", async () => {
+    const buffer = await createXlsxBuffer("lançamentos", [
+      ["Itaú Empresas"],
+      ["Agência: 0191", "Conta: 0026775-6"],
+      [],
+      ["Data", "Lançamento", "Valor (R$)", "Saldo (R$)"],
+      ["31/08/2026", "SALDO ANTERIOR", "", "472368,16"],
+      ["01/09/2026", "RECEBIMENTO PIX", "1898181,62", ""],
+      ["30/09/2026", "APL APLIC AUT MAIS", "-1898181,62", ""],
+      ["30/09/2026", "SALDO TOTAL DISPONÍVEL DIA", "", "2370549,78"],
+      ["30/09/2026", "SDO APLIC AUT MAIS AP", "2370548,78", ""],
+      ["01/10/2026", "SALDO EM CONTA CORRENTE", "2370566,90", ""],
+    ]);
+
+    const input: SourceFileInput = {
+      id: "test-file-trailing-summaries",
+      originalName: "itau-trailing-summaries.xlsx",
+      kind: "STATEMENT",
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer,
+    };
+
+    const { records, metadata, issues } = await parseTabularStatement(input, [ITAU_CHECKING_XLSX_V1]);
+
+    expect(records.map((r) => r.history)).toEqual(["RECEBIMENTO PIX", "APL APLIC AUT MAIS"]);
+    expect(metadata.openingBalance).toBe("472368.16");
+    expect(metadata.closingBalance).toBe("2370549.78");
+    expect(metadata.balanceCheck).toEqual(
+      expect.objectContaining({
+        status: "PASSED",
+        movementTotal: "1898181.62",
+        expectedClosingBalance: "2370549.78",
+        extractedClosingBalance: "2370549.78",
+        difference: "0.00",
+      })
+    );
+    expect(metadata.periods).toEqual(["202609"]);
+    expect(issues).toEqual([]);
+  });
+
   it("should reject a file with an unrecognized layout", async () => {
     const buffer = await createXlsxBuffer("lançamentos", [
       ["Coluna A", "Coluna B", "Coluna C"],

@@ -64,4 +64,39 @@ describe("SqliteCompletedReconciliationRepository", () => {
     const afterDelete = await repo.findById("rec-1", ["comp-1"], now);
     expect(afterDelete).toBeNull();
   });
+
+  it("exclui automaticamente a conciliação mais antiga quando a capacidade máxima é atingida", async () => {
+    const db = new DatabaseSync(":memory:");
+    const repo = new SqliteCompletedReconciliationRepository(db, 3);
+    const baseTime = new Date("2026-09-25T10:00:00Z").getTime();
+
+    for (let i = 1; i <= 4; i++) {
+      const completedAt = new Date(baseTime + i * 1000);
+      await repo.save({
+        id: `rec-${i}`,
+        organizationId: "org-1",
+        companyId: "comp-1",
+        userId: "user-1",
+        status: "COMPLETED",
+        period: `20260${i}`,
+        confirmation: {
+          company: "comp-1",
+          period: `20260${i}`,
+          valueTolerance: "0.01",
+          dateToleranceDays: 2,
+          mappings: [],
+          idempotencyKey: `idem-${i}`,
+        },
+        sourceFiles: [],
+        result: { period: `20260${i}`, status: "COMPLETED", results: [], issues: [] } as any,
+        completedAt,
+        expiresAt: new Date(completedAt.getTime() + 86400000),
+      }, `attempt-${i}`, 1);
+    }
+
+    const list = await repo.list(["comp-1"], 1, 10, new Date(baseTime));
+    expect(list.total).toBe(3);
+    expect(list.items.map((item) => item.id)).toEqual(["rec-4", "rec-3", "rec-2"]);
+    expect(await repo.findById("rec-1", ["comp-1"], new Date(baseTime))).toBeNull();
+  });
 });

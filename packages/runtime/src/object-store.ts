@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, S3Client, type S3ClientConfig } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { RuntimeConfig } from "./config.js";
 
@@ -38,15 +38,22 @@ export class LocalObjectStore implements ObjectStore {
 
 export class S3ObjectStore implements ObjectStore {
   readonly mode = "s3" as const;
-  private readonly client: S3Client;
+  private readonly client: S3Client & {
+    send(command: GetObjectCommand): Promise<{ Body?: { transformToByteArray(): Promise<Uint8Array> } }>;
+    send(command: PutObjectCommand | DeleteObjectCommand): Promise<unknown>;
+  };
   private readonly bucket: string;
   constructor(config: RuntimeConfig) {
     if (!config.s3Bucket || !config.s3Region) throw new Error("S3_BUCKET e S3_REGION são obrigatórios.");
     this.bucket = config.s3Bucket;
-    const clientConfig: S3ClientConfig = { region: config.s3Region, forcePathStyle: Boolean(config.s3Endpoint) };
-    if (config.s3Endpoint) clientConfig.endpoint = config.s3Endpoint;
-    if (config.s3AccessKeyId && config.s3SecretAccessKey) clientConfig.credentials = { accessKeyId: config.s3AccessKeyId, secretAccessKey: config.s3SecretAccessKey };
-    this.client = new S3Client(clientConfig);
+    this.client = new S3Client({
+      region: config.s3Region,
+      forcePathStyle: Boolean(config.s3Endpoint),
+      ...(config.s3Endpoint ? { endpoint: config.s3Endpoint } : {}),
+      ...(config.s3AccessKeyId && config.s3SecretAccessKey
+        ? { credentials: { accessKeyId: config.s3AccessKeyId, secretAccessKey: config.s3SecretAccessKey } }
+        : {}),
+    }) as any;
   }
   async put(key: string, data: Buffer, contentType: string) { await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: data, ContentType: contentType })); }
   async get(key: string) { const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key })); return Buffer.from(await response.Body!.transformToByteArray()); }

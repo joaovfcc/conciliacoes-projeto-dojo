@@ -29,6 +29,15 @@ export class MemorySessionStore implements SessionStore {
   constructor(private readonly config: RuntimeConfig) {}
 
   async create(clientKey: string, actorId: string, organizationId: string, companyId: string): Promise<CreateSessionResult> {
+    const activeForClient = [...memory.values()]
+      .filter((item) => item.clientKey === clientKey && !item.closed && !["CANCELLED", "EXPIRED"].includes(item.status))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    if (this.config.maxSessionsPerIp > 0 && activeForClient.length >= this.config.maxSessionsPerIp) {
+      const overflow = activeForClient.length - this.config.maxSessionsPerIp + 1;
+      for (const oldest of activeForClient.slice(0, overflow)) {
+        await this.delete(oldest.id);
+      }
+    }
     const token = randomBytes(32).toString("base64url");
     const now = new Date();
     const session: ReconciliationSession = {
@@ -139,7 +148,15 @@ function tokenMatches(expected: string, token: string): boolean { const actual =
 function hashConfirmation(confirmation: ConfirmProcessingRequest): string { return createHash("sha256").update(JSON.stringify(confirmation)).digest("hex"); }
 
 function mergeSession(current: ReconciliationSession, incoming: ReconciliationSession): ReconciliationSession {
-  if (current.closed || isSuccessfulTerminal(current.status)) return structuredClone(current);
+  if (current.closed) return structuredClone(current);
+  if (isSuccessfulTerminal(current.status)) {
+    if (incoming.status === current.status && incoming.result) {
+      const updated = structuredClone(current);
+      updated.result = structuredClone(incoming.result);
+      return updated;
+    }
+    return structuredClone(current);
+  }
   if (current.processingAttemptId && current.processingAttemptId !== incoming.processingAttemptId) return structuredClone(current);
   const merged = structuredClone(incoming);
   if (current.confirmation) {
@@ -216,7 +233,15 @@ local incoming = cjson.decode(ARGV[1])
 local value = redis.call('GET', KEYS[1])
 if value then
   local current = cjson.decode(value)
-  if current.closed or current.status == 'COMPLETED' or current.status == 'COMPLETED_WITH_ISSUES' then return 0 end
+  if current.closed then return 0 end
+  if current.status == 'COMPLETED' or current.status == 'COMPLETED_WITH_ISSUES' then
+    if incoming.status == current.status and incoming.result then
+      current.result = incoming.result
+      redis.call('PSETEX', KEYS[1], ARGV[2], cjson.encode(current))
+      return 1
+    end
+    return 0
+  end
   if current.processingAttemptId and current.processingAttemptId ~= incoming.processingAttemptId then return 0 end
   if current.confirmation then
     incoming.confirmation = current.confirmation

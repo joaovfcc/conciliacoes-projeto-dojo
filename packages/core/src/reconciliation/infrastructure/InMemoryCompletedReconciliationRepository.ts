@@ -8,17 +8,36 @@ export class InMemoryCompletedReconciliationRepository implements CompletedRecon
   readonly records = new Map<string, CompletedReconciliation>();
   private readonly processingAttempts = new Map<string, { id: string; generation: number }>();
 
+  constructor(
+    private readonly maxRecords = Number.parseInt(process.env.MAX_COMPLETED_RECONCILIATIONS ?? "50", 10) || 50,
+  ) {}
+
   async save(record: CompletedReconciliation, processingAttemptId?: string, processingGeneration?: number): Promise<boolean> {
     const created = !this.records.has(record.id);
-    if (created) this.records.set(record.id, structuredClone(record));
     if (!processingAttemptId || processingGeneration === undefined) {
+      this.records.set(record.id, structuredClone(record));
       this.processingAttempts.delete(record.id);
+      if (created) this.evictOldest();
       return created;
     }
     const currentAttempt = this.processingAttempts.get(record.id);
     if (!created && currentAttempt && currentAttempt.generation > processingGeneration) return false;
+    this.records.set(record.id, structuredClone(record));
     this.processingAttempts.set(record.id, { id: processingAttemptId, generation: processingGeneration });
+    if (created) this.evictOldest();
     return true;
+  }
+
+  private evictOldest(): void {
+    if (this.maxRecords <= 0 || this.records.size <= this.maxRecords) return;
+    const sorted = [...this.records.values()].sort(
+      (left, right) => left.completedAt.getTime() - right.completedAt.getTime(),
+    );
+    const overflow = this.records.size - this.maxRecords;
+    for (const oldest of sorted.slice(0, overflow)) {
+      this.records.delete(oldest.id);
+      this.processingAttempts.delete(oldest.id);
+    }
   }
 
   async list(companyIds: string[], page: number, size: number, now: Date): Promise<{

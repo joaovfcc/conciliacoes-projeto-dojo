@@ -233,6 +233,7 @@ export function ReconciliationApp({
         } else if (current.result) {
           confirmationAttemptRef.current = null;
           processingDeadlineRef.current = null;
+          setHistoryRecordId(current.id);
           setResult(current.result);
           setStage("RESULTS");
         } else if (["FAILED", "CANCELLED", "EXPIRED"].includes(current.status)) {
@@ -421,9 +422,15 @@ export function ReconciliationApp({
       setError("Informe uma tolerância de data inteira entre 0 e 3 dias.");
       return;
     }
+    const eligibleStatements = preflight.statements.filter((item) => item.reconciliationEligible);
+    const ignoredCount = eligibleStatements.filter((item) => statementMappings[item.fileId] === "__IGNORE__").length;
     const mappedStatementCount = mappings.reduce((acc, m) => acc + m.statementFileIds.length, 0);
-    if (mappedStatementCount !== preflight.statements.filter((item) => item.reconciliationEligible).length) {
-      setError("Selecione uma conta contábil para cada extrato elegível.");
+    if ((mappedStatementCount + ignoredCount) !== eligibleStatements.length) {
+      setError("Selecione uma conta contábil para cada extrato elegível ou marque como ignorado.");
+      return;
+    }
+    if (mappedStatementCount === 0) {
+      setError("Ao menos um extrato deve ser mapeado para conciliação.");
       return;
     }
     setBusy(true);
@@ -457,6 +464,7 @@ export function ReconciliationApp({
       );
       const body = await readResponse<{ session: PublicSession }>(response);
       setSession(body.session);
+      if (body.session.result) setHistoryRecordId(body.session.id);
       setResult(body.session.result ?? null);
       setStage(body.session.result ? "RESULTS" : "PROCESSING");
       void reloadHistory();
@@ -471,6 +479,7 @@ export function ReconciliationApp({
             const checkData = (await checkResponse.json()) as { session?: PublicSession };
             if (checkData.session?.result) {
               setSession(checkData.session);
+              setHistoryRecordId(checkData.session.id);
               setResult(checkData.session.result);
               setStage("RESULTS");
               void reloadHistory();
@@ -2058,16 +2067,17 @@ function Confirmation(props: {
   const currentAccountStatements = props.preflight.statements.filter((item) => item.reconciliationEligible);
   const investmentStatements = props.preflight.statements.filter((item) => !item.reconciliationEligible);
   const blocked = props.preflight.issues.some((item) => item.severity === "ERROR");
+  const ignoredCount = currentAccountStatements.filter((item) => props.statementMappings[item.fileId] === "__IGNORE__").length;
   const mappedStatementCount = confirmedMappings(props.preflight, props.statementMappings, props.linkedPhysicalStatementIds).reduce(
     (acc, m) => acc + m.statementFileIds.length,
     0,
   );
-  const mappingsComplete = mappedStatementCount === currentAccountStatements.length;
+  const mappingsComplete = (mappedStatementCount + ignoredCount) === currentAccountStatements.length && mappedStatementCount > 0;
   const identityMappingsConfirmed = confirmedIdentityMappings(props.preflight, props.statementMappings, props.linkedPhysicalStatementIds);
   const hasPartialIdentity = partialIdentityMappings(props.preflight, props.statementMappings);
 
   const isAutoMatched =
-    mappingsComplete && identityMappingsConfirmed && props.period !== "" && currentAccountStatements.length > 0 && !blocked && !Object.values(props.linkedPhysicalStatementIds).some(Boolean);
+    mappingsComplete && identityMappingsConfirmed && props.period !== "" && mappedStatementCount > 0 && !blocked && !Object.values(props.linkedPhysicalStatementIds).some(Boolean);
 
   return (
     <section className="card panel">
@@ -2145,8 +2155,8 @@ function Confirmation(props: {
       <div className="summary-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
         <Metric label="Empresas detectadas" value={props.preflight.companies.length || "—"} />
         <Metric label="Contas contábeis" value={props.preflight.ledgerAccounts.length} />
-        <Metric label="Extratos de conta" value={currentAccountStatements.length} />
-        <Metric label="Documentos de investimento" value={investmentStatements.length} />
+        <Metric label="Extratos conciliáveis" value={currentAccountStatements.length} />
+        <Metric label="Informativos / Sem movimento" value={investmentStatements.length} />
       </div>
 
       {mappingsComplete && !identityMappingsConfirmed && (
@@ -2222,6 +2232,11 @@ function Confirmation(props: {
                 {knownCategoricalValueLabel(signProfileForLedger(selectedLedger))}
               </div>
             )}
+            {props.statementMappings[statement.fileId] === "__IGNORE__" && (
+              <div className="text-muted text-sm" style={{ color: "var(--warning)" }}>
+                Extrato desconsiderado para a conciliação desta execução.
+              </div>
+            )}
           </div>
           <label className="field" style={{ margin: 0, minWidth: "260px" }}>
             <span className="sr-only">Conta contábil para {statement.originalName}</span>
@@ -2236,6 +2251,7 @@ function Confirmation(props: {
               }}
             >
               <option value="">Selecione a conta contábil</option>
+              <option value="__IGNORE__">[Ignorar este extrato nesta execução]</option>
               {props.preflight.ledgerAccounts.map((account) => (
                 <option key={`${account.company}-${account.branch}-${account.account}`} value={account.account}>
                   {account.account} ·{" "}
@@ -2270,9 +2286,9 @@ function Confirmation(props: {
 
       {investmentStatements.length > 0 && (
         <>
-          <h3 style={{ marginTop: "20px", fontSize: "15px" }}>Investimentos para Conferência</h3>
+          <h3 style={{ marginTop: "20px", fontSize: "15px" }}>Extratos e Documentos Informativos</h3>
           <div className="notice info">
-            Estes documentos são informativos e não participam da conciliação de conta corrente.
+            Estes documentos são informativos (sem movimentações no período ou relatórios de investimento) e não geram lançamentos para conciliação.
           </div>
           {investmentStatements.map((statement) => (
             <div className="rule-item" style={{ marginBottom: "8px" }} key={statement.fileId}>
@@ -2284,7 +2300,11 @@ function Confirmation(props: {
                     .join(" · ") || "Conta não identificada"}
                 </div>
               </div>
-              <span className="badge badge-secondary">{documentKindLabel(statement.classification)}</span>
+              <span className="badge badge-secondary">
+                {statement.recordCount === 0 || statement.classification === "CURRENT_ACCOUNT"
+                  ? "Sem movimentação"
+                  : documentKindLabel(statement.classification)}
+              </span>
             </div>
           ))}
         </>
@@ -2954,7 +2974,7 @@ export function confirmedMappings(
 
   for (const statement of eligible) {
     const account = statementMappings[statement.fileId];
-    if (!account) continue;
+    if (!account || account === "__IGNORE__") continue;
     const current = byAccount.get(account) ?? [];
     current.push(statement.fileId);
     byAccount.set(account, current);
@@ -3038,7 +3058,8 @@ export function confirmedIdentityMappings(
   linkedPhysicalStatementIds: Record<string, boolean> = {},
 ): boolean {
   const eligibleStatements = preflight.statements.filter((item) => item.reconciliationEligible);
-  return eligibleStatements.length > 0 && eligibleStatements.every((statement) => {
+  const activeStatements = eligibleStatements.filter((item) => statementMappings[item.fileId] !== "__IGNORE__");
+  return activeStatements.length > 0 && activeStatements.every((statement) => {
     const ledgerAccountCode = statementMappings[statement.fileId];
     const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === ledgerAccountCode);
     const identity = ledgerAccount && compareBankAccountIdentities(ledgerAccount, statement);
@@ -3052,11 +3073,13 @@ function partialIdentityMappings(
   preflight: PreflightResult,
   statementMappings: Record<string, string>,
 ): boolean {
-  return preflight.statements.filter((item) => item.reconciliationEligible).some((statement) => {
-    const ledgerAccountCode = statementMappings[statement.fileId];
-    const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === ledgerAccountCode);
-    return Boolean(ledgerAccount && compareBankAccountIdentities(ledgerAccount, statement).status === "PARTIAL");
-  });
+  return preflight.statements
+    .filter((item) => item.reconciliationEligible && statementMappings[item.fileId] !== "__IGNORE__")
+    .some((statement) => {
+      const ledgerAccountCode = statementMappings[statement.fileId];
+      const ledgerAccount = preflight.ledgerAccounts.find((item) => item.account === ledgerAccountCode);
+      return Boolean(ledgerAccount && compareBankAccountIdentities(ledgerAccount, statement).status === "PARTIAL");
+    });
 }
 
 async function uploadFile(

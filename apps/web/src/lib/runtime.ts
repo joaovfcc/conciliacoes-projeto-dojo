@@ -19,7 +19,10 @@ import { findLocalCompanyById, getLocalReconciliationRepository, getLocalRegiste
 const globalRuntime = globalThis as typeof globalThis & { reconciliationRuntime?: RuntimeServices; sweepStarted?: boolean };
 
 export function runtime(): RuntimeServices {
-  if (!globalRuntime.reconciliationRuntime) {
+  const previous = globalRuntime.reconciliationRuntime as
+    | { sessions?: SessionStore; objects?: ReturnType<typeof createObjectStore> }
+    | undefined;
+  if (!globalRuntime.reconciliationRuntime || !(globalRuntime.reconciliationRuntime instanceof RuntimeServices)) {
     const config = loadRuntimeConfig();
     const isLocal = process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL;
     if (isLocal) {
@@ -28,11 +31,13 @@ export function runtime(): RuntimeServices {
     const historyRepo = isLocal
       ? getLocalReconciliationRepository()
       : new PrismaCompletedReconciliationRepository(prisma);
+    const existingSessions = previous?.sessions;
+    const existingObjects = previous?.objects;
 
     globalRuntime.reconciliationRuntime = new RuntimeServices(
       config,
-      createSessionStore(config),
-      createObjectStore(config),
+      existingSessions ?? createSessionStore(config),
+      existingObjects ?? createObjectStore(config),
       historyRepo,
     );
   }
@@ -143,6 +148,20 @@ export function jsonError(error: unknown): Response {
   }
   if (error instanceof V2HttpError) {
     return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status });
+  }
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number"
+  ) {
+    const typed = error as Error & { code: string; status: number; retryAfterSeconds?: number };
+    const init: ResponseInit = { status: typed.status };
+    if (typed.retryAfterSeconds !== undefined) {
+      init.headers = { "Retry-After": String(typed.retryAfterSeconds) };
+    }
+    return Response.json({ error: { code: typed.code, message: typed.message } }, init);
   }
   if (error instanceof z.ZodError) {
     const firstIssue = error.issues[0]?.message || "Dados de entrada inválidos";

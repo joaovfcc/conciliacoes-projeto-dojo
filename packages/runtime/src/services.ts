@@ -198,12 +198,25 @@ export class RuntimeServices {
           // Fallback seguro incondicional: mantém o resultado determinístico
         }
       }
-      result.issues = [...session.preflight.issues, ...result.issues];
+      const balanceWarnings = session.preflight.statements
+        .filter((item) => item.reconciliationEligible && item.balanceCheck?.status === "FAILED")
+        .map((item) => ({
+          severity: "WARNING" as const,
+          code: "SALDO_EXTRATO_DIVERGENTE",
+          message: "O controle de saldo de um extrato apresentou divergência; revise os lançamentos conciliados.",
+          fileId: item.fileId,
+        }));
+      result.issues = [...session.preflight.issues, ...balanceWarnings, ...result.issues];
       result.files = session.preflight.statements;
       result.investments = session.investments ?? [];
       session.progress = 90; session.progressMessage = "RF-02 a RF-09 concluídas; consolidando controles e evidências."; await this.sessions.save(session);
       await this.assertSessionActive(session.id, processingAttemptId);
-      const status = result.issues.some((item) => item.severity === "ERROR") || result.results.some((item) => item.decisionLevel !== "AUTOMATIC") ? "COMPLETED_WITH_ISSUES" : "COMPLETED";
+      const status =
+        result.issues.some((item) => item.severity === "ERROR") ||
+        balanceWarnings.length > 0 ||
+        result.results.some((item) => item.decisionLevel !== "AUTOMATIC")
+          ? "COMPLETED_WITH_ISSUES"
+          : "COMPLETED";
       const completedAt = new Date();
       const expiresAt = new Date(completedAt);
       expiresAt.setUTCFullYear(expiresAt.getUTCFullYear() + 1);
@@ -393,8 +406,7 @@ function validateConfirmation(input: ConfirmProcessingRequest, session: Reconcil
   if (!input.idempotencyKey || input.idempotencyKey.length > 100) throw new PublicRuntimeError("IDEMPOTENCIA_INVALIDA", "A chave de idempotência é obrigatória.");
   const preflight = session.preflight;
   if (!preflight) throw new PublicRuntimeError("PREFLIGHT_AUSENTE", "Execute a pré-análise antes de confirmar.", 409);
-  if (preflight.statements.some((item) => item.reconciliationEligible && item.balanceCheck?.status === "FAILED")) throw new PublicRuntimeError("BALANCE_INTEGRITY_FAILED", "O controle de saldo de um extrato falhou; revise o arquivo antes de conciliar.", 422);
-  if (preflight.issues.some((item) => item.severity === "ERROR")) throw new PublicRuntimeError("PREFLIGHT_BLOQUEADO", "A pré-análise identificou erros que precisam ser corrigidos antes da conciliação.", 422);
+  if (preflight.issues.some((item) => item.severity === "ERROR" && item.code !== "BALANCE_INTEGRITY_FAILED")) throw new PublicRuntimeError("PREFLIGHT_BLOQUEADO", "A pré-análise identificou erros que precisam ser corrigidos antes da conciliação.", 422);
 
   const eligibleStatements = preflight.statements.filter((item) => item.reconciliationEligible);
   const mappedFileIds = new Set<string>();

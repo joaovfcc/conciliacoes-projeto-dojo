@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "postinstall": "pnpm --filter @conciliacao/core prisma:generate",
-    "dev": "pnpm --filter @conciliacao/core build && pnpm --filter @conciliacao/runtime build && pnpm --filter @conciliacao/web dev",
+    "dev": "cross-env LOCAL_MODE=true pnpm --filter @conciliacao/core build && cross-env LOCAL_MODE=true pnpm --filter @conciliacao/runtime build && cross-env LOCAL_MODE=true pnpm --filter @conciliacao/web dev",
     "dev:local": "cross-env LOCAL_MODE=true pnpm --filter @conciliacao/web dev",
     "build:web": "pnpm --filter @conciliacao/web build",
     "build:worker": "pnpm --filter @conciliacao/worker build",

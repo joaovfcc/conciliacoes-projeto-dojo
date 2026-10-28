@@ -118,12 +118,19 @@ export function reconciliationHistoryError(error: unknown): Response {
 }
 
 function readableCompanyIds(actor: ActorContext): string[] {
+  const fromRoles = Object.entries(actor.companyRoles ?? {})
+    .filter(([, roles]) => roles.some((role) => ["PREPARER", "REVIEWER", "ADMIN", "AUDITOR"].includes(role)))
+    .map(([companyId]) => companyId);
+
+  if (fromRoles.length > 0) {
+    return fromRoles;
+  }
+
   if (process.env.LOCAL_MODE === "true" || !process.env.DATABASE_URL) {
     return listLocalCompanies().map((c) => c.id);
   }
-  return Object.entries(actor.companyRoles)
-    .filter(([, roles]) => roles.some((role) => ["PREPARER", "REVIEWER", "ADMIN", "AUDITOR"].includes(role)))
-    .map(([companyId]) => companyId);
+
+  return [];
 }
 
 function boundedInteger(raw: string | null, fallback: number, minimum: number, maximum: number): number {

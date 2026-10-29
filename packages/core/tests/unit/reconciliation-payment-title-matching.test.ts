@@ -614,4 +614,236 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       expect(resOut.results.some((r) => r.status === "AMBIGUOUS_MATCH")).toBe(true);
     });
   });
+
+  describe("SISPAG Banking Batch Reconciliation Suite (Positive, Negative & Ambiguity)", () => {
+    const confirmation: ConfirmProcessingRequest = {
+      company: "EMPRESA",
+      branch: "01",
+      period: "202512",
+      valueTolerance: "0.01",
+      dateToleranceDays: 2,
+      mappings: [
+        {
+          ledgerAccount: "11102012",
+          statementFileIds: ["stmt-file-1"],
+          signProfile: "BANK_LIABILITY",
+        },
+      ],
+      idempotencyKey: "test-sispag-reconciliation-suite",
+    };
+
+    describe("1. Real Positive Cases (SISPAG vs Accounting Title Settlement)", () => {
+      it("reconciles real case TELEFONICA BRASIL (SISPAG batch vs BAIXA TIT)", () => {
+        const stmtTelefonica: StatementRecord = {
+          id: "stmt-telefonica",
+          sourceId: "s-tel",
+          bank: "341",
+          agency: "1234",
+          bankAccount: "12345",
+          date: "2025-12-15",
+          document: "25",
+          history: "SISPAG FORNECEDORES 9128 - 25",
+          value: "-1381.43",
+          evidence: { fileId: "stmt-file-1", line: 10, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+        };
+        const ldgTelefonica: LedgerRecord = {
+          id: "ldg-telefonica",
+          sourceId: "l-tel",
+          company: "EMPRESA",
+          branch: "01",
+          ledgerAccount: "11102012",
+          date: "2025-12-15",
+          document: "000035017",
+          history: "BAIXA TIT. - 000035017 - TELEFONICA BRA",
+          value: "-1381.43",
+          evidence: { fileId: "ldg-file-1", line: 20, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+        };
+
+        const result = reconcile([ldgTelefonica], [stmtTelefonica], confirmation);
+        const matches = result.results.filter((r) => r.status.startsWith("AUTO_MATCH"));
+
+        expect(matches).toHaveLength(1);
+        expect(matches[0]!.statement?.id).toBe(stmtTelefonica.id);
+        expect(matches[0]!.ledger?.id).toBe(ldgTelefonica.id);
+        expect(matches[0]!.status).toBe("AUTO_MATCH_EXACT");
+        expect(matches[0]!.rule).toBe("RF-02");
+        expect(result.reconciliation?.matchGroups).toHaveLength(1);
+        expect(result.reconciliation?.matchGroups[0]?.bankTransactionIds).toContain(stmtTelefonica.id);
+        expect(result.reconciliation?.matchGroups[0]?.ledgerTransactionIds).toContain(ldgTelefonica.id);
+      });
+
+      it("reconciles real case ADATA INTEGRATION (SISPAG batch vs BAIXA TIT)", () => {
+        const stmtAdata: StatementRecord = {
+          id: "stmt-adata",
+          sourceId: "s-adata",
+          bank: "341",
+          agency: "1234",
+          bankAccount: "12345",
+          date: "2025-12-16",
+          document: "25",
+          history: "SISPAG FORNECEDORES 9327 - 25",
+          value: "-5420.00",
+          evidence: { fileId: "stmt-file-1", line: 12, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+        };
+        const ldgAdata: LedgerRecord = {
+          id: "ldg-adata",
+          sourceId: "l-adata",
+          company: "EMPRESA",
+          branch: "01",
+          ledgerAccount: "11102012",
+          date: "2025-12-16",
+          document: "000035018",
+          history: "BAIXA TIT. - 000035018 - ADATA INTEGRA",
+          value: "-5420.00",
+          evidence: { fileId: "ldg-file-1", line: 22, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+        };
+
+        const result = reconcile([ldgAdata], [stmtAdata], confirmation);
+        const matches = result.results.filter((r) => r.status.startsWith("AUTO_MATCH"));
+
+        expect(matches).toHaveLength(1);
+        expect(matches[0]!.statement?.id).toBe(stmtAdata.id);
+        expect(matches[0]!.ledger?.id).toBe(ldgAdata.id);
+        expect(matches[0]!.status).toBe("AUTO_MATCH_EXACT");
+        expect(matches[0]!.rule).toBe("RF-02");
+        expect(result.reconciliation?.matchGroups).toHaveLength(1);
+        expect(result.reconciliation?.matchGroups[0]?.bankTransactionIds).toContain(stmtAdata.id);
+        expect(result.reconciliation?.matchGroups[0]?.ledgerTransactionIds).toContain(ldgAdata.id);
+      });
+    });
+
+    describe("2. Negative Tests (QA Gate - False Positive Prevention)", () => {
+      it("rejects matching when explicit invoice numbers diverge (NF 99999 vs NF 88888)", () => {
+        const stmtNF: StatementRecord = {
+          id: "stmt-nf-divergent",
+          sourceId: "s-nf-div",
+          bank: "341",
+          agency: "1234",
+          bankAccount: "12345",
+          date: "2025-12-15",
+          document: "99999",
+          history: "SISPAG NF 99999 9128 - 25",
+          value: "-1000.00",
+          evidence: { fileId: "stmt-file-1", line: 14, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+        };
+        const ldgNF: LedgerRecord = {
+          id: "ldg-nf-divergent",
+          sourceId: "l-nf-div",
+          company: "EMPRESA",
+          branch: "01",
+          ledgerAccount: "11102012",
+          date: "2025-12-15",
+          document: "88888",
+          history: "BAIXA TIT. NF 88888 - FORNECEDOR",
+          value: "-1000.00",
+          evidence: { fileId: "ldg-file-1", line: 24, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+        };
+
+        const result = reconcile([ldgNF], [stmtNF], confirmation);
+        const matches = result.results.filter((r) => r.status.startsWith("AUTO_MATCH"));
+
+        expect(matches).toHaveLength(0);
+        expect(result.reconciliation?.matchGroups).toHaveLength(0);
+        expect(result.results.some((r) => r.status === "STATEMENT_WITHOUT_LEDGER")).toBe(true);
+        expect(result.results.some((r) => r.status === "LEDGER_WITHOUT_STATEMENT")).toBe(true);
+      });
+
+      it("rejects matching when explicit title numbers diverge (TIT. 12345 vs TIT. 54321)", () => {
+        const stmtTit: StatementRecord = {
+          id: "stmt-tit-divergent",
+          sourceId: "s-tit-div",
+          bank: "341",
+          agency: "1234",
+          bankAccount: "12345",
+          date: "2025-12-15",
+          document: "12345",
+          history: "SISPAG TIT. 12345 9128 - 25",
+          value: "-1500.00",
+          evidence: { fileId: "stmt-file-1", line: 15, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+        };
+        const ldgTit: LedgerRecord = {
+          id: "ldg-tit-divergent",
+          sourceId: "l-tit-div",
+          company: "EMPRESA",
+          branch: "01",
+          ledgerAccount: "11102012",
+          date: "2025-12-15",
+          document: "000054321",
+          history: "BAIXA TIT. - 000054321 - FORNECEDOR",
+          value: "-1500.00",
+          evidence: { fileId: "ldg-file-1", line: 25, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+        };
+
+        const result = reconcile([ldgTit], [stmtTit], confirmation);
+        const matches = result.results.filter((r) => r.status.startsWith("AUTO_MATCH"));
+
+        expect(matches).toHaveLength(0);
+        expect(result.reconciliation?.matchGroups).toHaveLength(0);
+      });
+    });
+
+    describe("3. Ambiguity Tests (Ambiguous Matching & Non-Arbitrary Pairing)", () => {
+      it("preserves ambiguity for multiple transactions on same date with identical amount and generic history", () => {
+        const stmtAmb1: StatementRecord = {
+          id: "stmt-amb-1",
+          sourceId: "s-amb-1",
+          bank: "341",
+          agency: "1234",
+          bankAccount: "12345",
+          date: "2025-12-10",
+          document: "25",
+          history: "SISPAG FORNECEDORES 9128 - 25",
+          value: "-2500.00",
+          evidence: { fileId: "stmt-file-1", line: 30, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+        };
+        const stmtAmb2: StatementRecord = {
+          id: "stmt-amb-2",
+          sourceId: "s-amb-2",
+          bank: "341",
+          agency: "1234",
+          bankAccount: "12345",
+          date: "2025-12-10",
+          document: "25",
+          history: "SISPAG FORNECEDORES 9128 - 25",
+          value: "-2500.00",
+          evidence: { fileId: "stmt-file-1", line: 31, originalName: "extrato.xlsx", extractionMethod: "TABULAR" },
+        };
+        const ldgAmb1: LedgerRecord = {
+          id: "ldg-amb-1",
+          sourceId: "l-amb-1",
+          company: "EMPRESA",
+          branch: "01",
+          ledgerAccount: "11102012",
+          date: "2025-12-10",
+          document: "",
+          history: "PAGAMENTO DIVERSOS",
+          value: "-2500.00",
+          evidence: { fileId: "ldg-file-1", line: 40, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+        };
+        const ldgAmb2: LedgerRecord = {
+          id: "ldg-amb-2",
+          sourceId: "l-amb-2",
+          company: "EMPRESA",
+          branch: "01",
+          ledgerAccount: "11102012",
+          date: "2025-12-10",
+          document: "",
+          history: "PAGAMENTO DIVERSOS",
+          value: "-2500.00",
+          evidence: { fileId: "ldg-file-1", line: 41, originalName: "razao.xlsx", extractionMethod: "TABULAR" },
+        };
+
+        const result = reconcile([ldgAmb1, ldgAmb2], [stmtAmb1, stmtAmb2], confirmation);
+        const autoMatches = result.results.filter((r) => r.status.startsWith("AUTO_MATCH"));
+
+        // Must NEVER pair 1:1 arbitrarily without unique evidence
+        expect(autoMatches).toHaveLength(0);
+        expect(result.reconciliation?.matchGroups).toHaveLength(0);
+
+        // Ambiguous items must either be flagged as AMBIGUOUS_MATCH or kept open with ambiguity group
+        const ambiguousResults = result.results.filter((r) => r.status === "AMBIGUOUS_MATCH");
+        expect(ambiguousResults.length).toBeGreaterThanOrEqual(2);
+      });
+    });
+  });
 });

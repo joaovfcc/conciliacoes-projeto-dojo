@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeDocumentId,
   normalizeDocument,
+  extractDocumentNumber,
 } from "../../src/normalization.js";
 import {
   ReconciliationEngine,
@@ -29,6 +30,17 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       expect(normalizeDocumentId("64773-A")).toBe("64773-A");
       expect(normalizeDocumentId("0000")).toBe("0");
       expect(normalizeDocumentId("")).toBe("");
+    });
+
+    it("does not extract SISPAG or PAGFOR internal lot numbers as document numbers", () => {
+      expect(extractDocumentNumber("SISPAG FORNECEDORES 9128 - 25")).toBeUndefined();
+      expect(extractDocumentNumber("SISPAGFORNECEDORES 9327 - 25")).toBeUndefined();
+      expect(extractDocumentNumber("SISPAG TRIBUTOS 9121 - 25")).toBeUndefined();
+      expect(extractDocumentNumber("SISPAG MODE IT TECHNOLO 9953 - 25")).toBeUndefined();
+      expect(extractDocumentNumber("TED 755.1306.SOUZA 9925 - 25")).toBeUndefined();
+      // Preserva títulos e NFs quando explicitamente indicados
+      expect(extractDocumentNumber("SISPAG NF 35017 9128 - 25")).toBe("35017");
+      expect(extractDocumentNumber("PGTO ITAU 64773 - 25")).toBe("64773");
     });
   });
 

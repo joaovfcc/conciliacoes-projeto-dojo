@@ -243,11 +243,15 @@ export function extractDocumentNumber(text: string | undefined): string | undefi
   // e.g. "TRANSF. BANC. - 341 8363  00378" (341 bank, 8363 agency, 00378 account)
   // Strip formatted CNPJ/CPF or dotted 8-digit CNPJ roots:
   // e.g. "66.033.211", "65.929.113", "28.944.801/0001-24", "094.048.457-95"
+  // Strip bank batch/lot numbers typical of Itaú SISPAG and Bradesco PAGFOR:
+  // e.g. "SISPAG FORNECEDORES 9128 - 25", "SISPAGFORNECEDORES 9327 - 25", "9925 - 25"
   const cleaned = raw
     .replace(/\b(?:TRANSF\.?\s*BANC\.?|TAR\.?\s*BANC\.?)\s*[-–:#/]?\s*\d{3}\s+\d{3,5}\s+\d{3,10}\b/gi, " ")
     .replace(/\b\d{2,3}\.\d{3}\.\d{3}(?:\/\d{4}-\d{2}|-\d{2})?\b/g, " ")
     .replace(/\b\d{3}\.\d{3,5}\.(?=[A-Z0-9])/g, " ")
-    .replace(/\b\d{3}\.\d{3,5}\b/g, " ");
+    .replace(/\b\d{3}\.\d{3,5}\b/g, " ")
+    .replace(/\b\d{4}\s*[-–]\s*\d{1,3}\b/g, " ")
+    .replace(/\b(?:SISPAG|PAGFOR)\w*\b/gi, " ");
 
   const isSupplierPaymentHeader = /PAGAMENTOS\s+A\s+FORNECEDORES/i.test(raw);
 

@@ -9,6 +9,8 @@ import {
   extractSemanticCategories,
   normalizeReconciliationText,
   reconciliationTextSimilarity,
+  isTransferOrGenericBanking,
+  hasExplicitTitleOrInvoiceNumber,
 } from "../../src/reconciliation/domain/ReconciliationEngine.js";
 import {
   reconcile,
@@ -41,6 +43,14 @@ describe("Reconciliation Payment & Title Matching (PGTO ITAU 64773 vs BAIXA TIT 
       // Preserva títulos e NFs quando explicitamente indicados
       expect(extractDocumentNumber("SISPAG NF 35017 9128 - 25")).toBe("35017");
       expect(extractDocumentNumber("PGTO ITAU 64773 - 25")).toBe("64773");
+    });
+
+    it("identifies SISPAG and PAGFOR as generic banking transfers without explicit title", () => {
+      expect(isTransferOrGenericBanking("SISPAG FORNECEDORES 9128 - 25")).toBe(true);
+      expect(hasExplicitTitleOrInvoiceNumber("SISPAG FORNECEDORES 9128 - 25")).toBe(false);
+      expect(hasExplicitTitleOrInvoiceNumber("SISPAG FORNECEDORES NF 35017 9128 - 25")).toBe(true);
+      expect(isTransferOrGenericBanking("PAGFOR 1234 - 25")).toBe(true);
+      expect(hasExplicitTitleOrInvoiceNumber("PAGFOR 1234 - 25")).toBe(false);
     });
   });
 

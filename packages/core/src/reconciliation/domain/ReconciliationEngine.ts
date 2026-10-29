@@ -266,7 +266,7 @@ export interface CandidateScoreBreakdown {
 export function isTransferOrGenericBanking(text: string | undefined): boolean {
   if (!text) return false;
   const raw = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
-  return /\b(?:TED|PIX|TRANSF|TRANSFERENCIA|DOC|RECEBIMENTOS?|PAGAMENTOS?\s+A\s+FORNECEDORES|TAR\.?\s*BANC|TARIFA)\b/i.test(raw);
+  return /\b(?:TED|PIX|TRANSF|TRANSFERENCIA|DOC|RECEBIMENTOS?|PAGAMENTOS?\s+A\s+FORNECEDORES|SISPAG|PAGFOR|TAR\.?\s*BANC|TARIFA)\b/i.test(raw);
 }
 
 export function hasExplicitTitleOrInvoiceNumber(text: string | undefined): boolean {
@@ -276,7 +276,9 @@ export function hasExplicitTitleOrInvoiceNumber(text: string | undefined): boole
     .replace(/\b(?:TRANSF\.?\s*BANC\.?|TAR\.?\s*BANC\.?)\s*[-–:#/]?\s*\d{3}\s+\d{3,5}\s+\d{3,10}\b/gi, " ")
     .replace(/\b\d{2,3}\.\d{3}\.\d{3}(?:\/\d{4}-\d{2}|-\d{2})?\b/g, " ")
     .replace(/\b\d{3}\.\d{3,5}\.(?=[A-Z0-9])/g, " ")
-    .replace(/\b\d{3}\.\d{3,5}\b/g, " ");
+    .replace(/\b\d{3}\.\d{3,5}\b/g, " ")
+    .replace(/\b\d{4}\s*[-–]\s*\d{1,3}\b/g, " ")
+    .replace(/\b(?:SISPAG|PAGFOR)\w*\b/gi, " ");
 
   // 1. Explicit Title/Document prefixes
   if (/\b(?:BAIXA\s+TIT(?:ULO)?\.?|BXA\.?\s*(?:TIT(?:ULO)?\.?|JUROS|DESC|MULTA|ACRESC)?|TIT\.?|TITULO|TITULOS|INCL\.?\s*PA)\s*[-–:#/]?\s*0*([1-9]\d{2,12})\b/i.test(cleaned)) {
